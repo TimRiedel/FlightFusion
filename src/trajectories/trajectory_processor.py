@@ -25,7 +25,6 @@ class TrajectoryProcessor(DatasetProcessor):
 
     def download_flightlist(self):
         logger.info(f"📥 Downloading flight lists for {self.icao}...")
-        self._set_raw_data_dir("flightlist")
 
         flightlist_df = self._get_flightlist()
 
@@ -39,7 +38,7 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"✅ Processed {len(flightlist_df)} flights, saved flightlist to {path}\n")
 
     def _get_flightlist(self) -> pd.DataFrame:
-        raw_data_path = self._get_raw_file_path_for("flightlist")
+        raw_data_path = self._get_raw_file_path_for("raw-flightlist")
 
         if os.path.exists(raw_data_path):
             logger.info(f"    ✓ Found existing raw flightlist data, skipping download.")
@@ -96,7 +95,6 @@ class TrajectoryProcessor(DatasetProcessor):
 
     def download_trajectories(self):
         logger.info(f"📡 Downloading trajectories for {self.icao}...")
-        self._set_raw_data_dir("trajectories")
 
         flightlist_df = self._load_flightlist_data()
         daily_paths = []
@@ -121,7 +119,7 @@ class TrajectoryProcessor(DatasetProcessor):
                 day_trajs.append(flight.data)
 
             day_merged = pd.concat(day_trajs, ignore_index=True)
-            day_path = self._get_raw_file_path_for("trajectories", day)
+            day_path = self._get_raw_file_path_for("trajectories", pd.to_datetime(day))
             self._save_data(day_merged, day_path, sortby="timestamp")
             logger.info(f"        ✓ Saved {len(day_merged)} trajectory points for {day} to {day_path}")
             daily_paths.append(day_path)

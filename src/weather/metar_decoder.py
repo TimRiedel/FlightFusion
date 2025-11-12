@@ -34,7 +34,6 @@ class MetarDecoder(DatasetProcessor):
 
     def download(self):
         logger.info(f"📥 Downloading METARs for {self.icao}...")
-        self._set_raw_data_dir("metar")
 
         raw_reports_df = self._fetch_raw_reports()
         path = self._get_raw_file_path_for("metar")
@@ -89,11 +88,9 @@ class MetarDecoder(DatasetProcessor):
     # --------------------
 
     def parse(self):
-        self._set_raw_data_dir("metar")
         raw_reports_df = self._load_data(self._get_raw_file_path_for("metar"))
         logger.info(f"⛅ Parsing {len(raw_reports_df)} METAR reports...")
 
-        self._set_raw_data_dir("parsed-metar")
         parsed_reports_map = {}
         for report in raw_reports_df.itertuples():
             try:
@@ -156,7 +153,6 @@ class MetarDecoder(DatasetProcessor):
     # --------------------
 
     def process(self):
-        self._set_raw_data_dir("parsed-metar")
         parsed_reports_df = self._load_data(self._get_raw_file_path_for("parsed-metar"))
         logger.info(f"📈 Processing {len(parsed_reports_df)} METAR reports for machine learning...")
 

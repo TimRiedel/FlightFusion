@@ -9,26 +9,24 @@ class DatasetProcessor:
         self.icao = icao.upper()
         self.start_dt = pd.to_datetime(start_dt).tz_localize("UTC") # enforce UTC timezone
         self.end_dt = pd.to_datetime(end_dt).tz_localize("UTC")
+
         self.output_dir = os.path.join(output_dir, self.icao)
+        self.raw_data_dir = os.path.join(self.output_dir, "raw")
         os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.raw_data_dir, exist_ok=True)
 
         self.all_days = pd.date_range(start=self.start_dt, end=self.end_dt, freq="D")
 
     # --------------------
     # Utility
     # --------------------
-    def _set_raw_data_dir(self, data_type: str):
-        self.raw_data_dir = os.path.join(self.output_dir, f"raw-{data_type}")
-        os.makedirs(self.raw_data_dir, exist_ok=True)
-
     def _get_raw_file_path_for(self, data_type: str, day: datetime = None) -> str:
         if day is None:
             return os.path.join(
-                self.output_dir,
-                f"raw-{data_type}",
+                self.raw_data_dir,
                 f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.parquet"
             )
-        return os.path.join(self.output_dir, f"raw-{data_type}", f"{self.icao}_{data_type}_{day.date()}.parquet")
+        return os.path.join(self.raw_data_dir, f"{self.icao}_{data_type}_{day.date()}.parquet")
 
     def _get_output_file_path_for(self, data_type: str) -> str:
         return os.path.join(self.output_dir, f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.parquet")
