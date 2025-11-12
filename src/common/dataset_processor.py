@@ -5,10 +5,11 @@ import pandas as pd
 
 
 class DatasetProcessor:
-    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, output_dir: str, cfg: dict):
+    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, radius_km: int, output_dir: str, cfg: dict):
         self.icao = icao.upper()
         self.start_dt = pd.to_datetime(start_dt).tz_localize("UTC") # enforce UTC timezone
         self.end_dt = pd.to_datetime(end_dt).tz_localize("UTC")
+        self.radius_m = radius_km * 1000
 
         self.output_dir = os.path.join(output_dir, self.icao)
         self.raw_data_dir = os.path.join(self.output_dir, "raw")
