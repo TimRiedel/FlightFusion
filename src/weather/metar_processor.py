@@ -15,7 +15,7 @@ from utils.logger import logger
 
 OGIMET_BASE = "https://www.ogimet.com/cgi-bin/getmetar"
 
-class MetarDecoder(DatasetProcessor):
+class MetarProcessor(DatasetProcessor):
     def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, output_dir: str, cfg: dict = {}):
         output_dir = os.path.join(output_dir, "metar")
         super().__init__(icao, start_dt, end_dt, output_dir, cfg)
