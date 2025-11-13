@@ -5,7 +5,7 @@ import yaml
 TASK_STEPS = {
     "flights": ["download_flightlist", "download_trajectories", "process", "all"],
     "metar": ["download", "parse", "process", "all"],
-    "weather": ["download", "process", "all"],
+    "weather": ["download", "merge", "all"],
     "all": ["all"],
 }
 ALL_STEPS = set(step for steps in TASK_STEPS.values() for step in steps)

@@ -47,8 +47,8 @@ def main():
             weather_processor = WeatherProcessor(icao, start_dt, end_dt, cfg["radius_km"], cfg["output_dir"], cfg["weather"])
             if step in ["all", "download"]:
                 weather_processor.download()
-            if step in ["all", "process"]:
-                weather_processor.process()
+            if step in ["all", "merge"]:
+                weather_processor.merge()
 
     if task in ["flights", "all"]:
         for icao in airports:
