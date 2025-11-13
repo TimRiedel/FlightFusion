@@ -10,7 +10,7 @@ from weather.weather_downloader import CerraDownloader, Era5Downloader
 from common.dataset_processor import DatasetProcessor
 from common.projections import get_circle_around_location
 from utils.logger import logger
-
+from utils.output_capture import console_output_prefix
 
 class WeatherProcessor(DatasetProcessor):
     def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, radius_km: int, output_dir: str, cfg: dict = {},):
@@ -76,7 +76,8 @@ class WeatherProcessor(DatasetProcessor):
             days = self._get_days_to_download(year, month)
             grib_path = self._get_raw_file_path_for(year, month, "grib")
             logger.info(f"    - Downloading {len(days)} days for {month:02d}-{year}...")
-            self.weather_downloader.fetch_month(year, month, days, self.variables, self.pressure_levels, grib_path)
+            with console_output_prefix("        | "):
+                self.weather_downloader.fetch_month(year, month, days, self.variables, self.pressure_levels, grib_path)
             logger.info(f"        ✓ Finished downloading. Saved GRIB to {grib_path}.")
 
 
