@@ -4,11 +4,13 @@ from calendar import monthrange
 
 import shapely
 import xarray as xr
+import xesmf as xe
+import numpy as np
 from traffic.data import airports
 
 from weather.weather_downloader import CerraDownloader, Era5Downloader
 from common.dataset_processor import DatasetProcessor
-from common.projections import get_circle_around_location
+from common.projections import Bounds, get_circle_around_location, get_curvilinear_grid_around_location
 from utils.logger import logger
 from utils.output_capture import console_output_prefix
 
@@ -20,14 +22,16 @@ class WeatherProcessor(DatasetProcessor):
         self.dataset_name = cfg.get("dataset_name")
         self.variables = cfg.get("variables")
         self.pressure_levels = cfg.get("pressure_levels")
-        self.pressure_levels_str = [str(level) for level in self.pressure_levels]
-        
+
         if self.dataset_name == "cerra":
             self.weather_downloader = CerraDownloader(icao, self.dataset_name, output_dir)
         elif self.dataset_name == "era5":
             self.weather_downloader = Era5Downloader(icao, self.dataset_name, output_dir)
         else:
             raise ValueError(f"Invalid dataset: {self.dataset_name}")
+
+        self.grid_n_x = cfg.get("grid_num_x")
+        self.grid_n_y = cfg.get("grid_num_y")
 
     # ------------------------------------
     # Utils
@@ -75,35 +79,72 @@ class WeatherProcessor(DatasetProcessor):
         for year, month in months_to_download:
             days = self._get_days_to_download(year, month)
             grib_path = self._get_raw_file_path_for(year, month, "grib")
-            logger.info(f"    - Downloading {len(days)} days for {month:02d}-{year}...")
-            with console_output_prefix("        | "):
-                self.weather_downloader.fetch_month(year, month, days, self.variables, self.pressure_levels, grib_path)
-            logger.info(f"        ✓ Finished downloading. Saved GRIB to {grib_path}.")
-
-
             zarr_path = self._get_raw_file_path_for(year, month, "zarr")
-            logger.info(f"    - Cropping data...")
-            self._crop_monthly_grib_file(grib_path, zarr_path)
-            logger.info(f"        ✓ Finished cropping {month:02d}-{year}. Removed grib file. Saved ZARR to {zarr_path}.")
+            exists_raw_grib = os.path.exists(grib_path)
+            exists_cropped_zarr = os.path.exists(zarr_path)
+
+            if exists_raw_grib or exists_cropped_zarr:
+                logger.info(f"    - {month:02d}-{year} already downloaded. Skipping download...")
+            else:
+                logger.info(f"    - Downloading {len(days)} days for {month:02d}-{year}...")
+                with console_output_prefix("        | "):
+                    self.weather_downloader.fetch_month(year, month, days, self.variables, self.pressure_levels, grib_path)
+                logger.info(f"        ✓ Finished downloading. Saved GRIB to {grib_path}.")
+
+            if not exists_cropped_zarr:
+                logger.info(f"    - Bringing GRIB data into the correct format. This might take a while...")
+                ds = self.weather_downloader.retrieve_xr_dataset_from_grib(grib_path)
+                logger.info(f"        ✓ Done.")
+
+                logger.info(f"    - Regridding data to airport circle bounds...")
+                ds = self._regrid_dataset_to_airport(ds, exact_curvilinear_grid=True)
+
+                ds.to_zarr(zarr_path, mode="w", consolidated=False, zarr_format=3)
+                os.remove(grib_path)
+                logger.info(f"        ✓ Finished regridding. Removed grib file. Saved ZARR to {zarr_path}.")
 
 
         logger.info(f"✅ Finished downloading {self.dataset_name.upper()} reanalysis data for {self.icao}.\n")
 
-    def _crop_monthly_grib_file(self, grib_path: str, zarr_path: str):
-        # Indexpath is empty to avoid creating a .idx file
-        ds = xr.load_dataset(grib_path, engine="cfgrib", backend_kwargs={"indexpath": ""}, decode_timedelta=True)
-        ds = ds.rename({'isobaricInhPa': 'level'})
-        ds = ds.drop_vars(['number', 'step', 'valid_time'])
-
+    def _regrid_dataset_to_airport(self, ds: xr.Dataset, exact_curvilinear_grid: bool = True):
         lat, lon = airports[self.icao].latlon
-        circle = get_circle_around_location(lat, lon, self.radius_m)
-        min_lon, min_lat, max_lon, max_lat = self._get_enclosing_weather_bounds(ds, circle) 
 
-        # Latitude coordinates are descending (90.0 -> -90.0), so slice from upper to lower
-        cropped_ds = ds.sel(latitude=slice(max_lat, min_lat), longitude=slice(min_lon, max_lon))
-        cropped_ds.to_zarr(zarr_path, mode="w", consolidated=False, zarr_format=3)
+        if exact_curvilinear_grid:
+            lat2d, lon2d = get_curvilinear_grid_around_location(lat, lon, self.radius_m, num_x=self.grid_n_x, num_y=self.grid_n_y)
+            regridded_ds = self._regrid_dataset_curvilinear(ds, lat2d, lon2d)
+            return regridded_ds
+        else:
+            circle = get_circle_around_location(lat, lon, self.radius_m)
+            bounds = self._get_enclosing_weather_bounds(ds, circle) 
+            regridded_ds = self._regrid_dataset_regular(ds, bounds=bounds, num_lat=self.grid_n_x, num_lon=self.grid_n_y)
 
-        os.remove(grib_path)
+    def _regrid_dataset_curvilinear(self, ds: xr.Dataset, lat2d: np.ndarray, lon2d: np.ndarray):
+        ds_out = xr.Dataset(
+            coords={
+                "latitude": (["y", "x"], lat2d),
+                "longitude": (["y", "x"], lon2d),
+            }
+        )
+
+        regridder = xe.Regridder(ds, ds_out, method="bilinear", periodic=False)
+        regridded_ds = regridder(ds)
+        return regridded_ds
+            
+    def _regrid_dataset_regular(self, ds: xr.Dataset, bounds: Bounds, num_lat: int, num_lon: int):
+        min_lon, min_lat, max_lon, max_lat = bounds.min_lon, bounds.min_lat, bounds.max_lon, bounds.max_lat
+        res_lon = (max_lon - min_lon) / num_lon
+        res_lat = (max_lat - min_lat) / num_lat
+        margin = 1e-6
+
+        ds_out = xr.Dataset(
+            {
+                "latitude": (["latitude"], np.arange(min_lat, max_lat + margin, res_lat)),
+                "longitude": (["longitude"], np.arange(min_lon, max_lon + margin, res_lon)),
+            }
+        )
+        regridder = xe.Regridder(ds, ds_out, "bilinear")
+        regridded_ds = regridder(ds)
+        return regridded_ds
 
     def _get_enclosing_weather_bounds(self, ds: xr.Dataset, circle: shapely.geometry.Polygon):
         min_lon, min_lat, max_lon, max_lat = circle.bounds
@@ -111,17 +152,17 @@ class WeatherProcessor(DatasetProcessor):
         ds_lats = ds.latitude.values
         ds_lons = ds.longitude.values
 
-        lon_lower_candidates = ds_lons[ds_lons <= min_lon]
-        lat_lower_candidates = ds_lats[ds_lats <= min_lat]
-        lon_upper_candidates = ds_lons[ds_lons >= max_lon]
-        lat_upper_candidates = ds_lats[ds_lats >= max_lat]
+        min_lon_candidates = ds_lons[ds_lons <= min_lon]
+        min_lat_candidates = ds_lats[ds_lats <= min_lat]
+        max_lon_candidates = ds_lons[ds_lons >= max_lon]
+        max_lat_candidates = ds_lats[ds_lats >= max_lat]
 
-        lon_lower = lon_lower_candidates.max() if lon_lower_candidates.size > 0 else ds_lons.min()
-        lat_lower = lat_lower_candidates.max() if lat_lower_candidates.size > 0 else ds_lats.min()
-        lon_upper = lon_upper_candidates.min() if lon_upper_candidates.size > 0 else ds_lons.max()
-        lat_upper = lat_upper_candidates.min() if lat_upper_candidates.size > 0 else ds_lats.max()
+        min_lon = min_lon_candidates.max() if min_lon_candidates.size > 0 else ds_lons.min()
+        min_lat = min_lat_candidates.max() if min_lat_candidates.size > 0 else ds_lats.min()
+        max_lon = max_lon_candidates.min() if max_lon_candidates.size > 0 else ds_lons.max()
+        max_lat = max_lat_candidates.min() if max_lat_candidates.size > 0 else ds_lats.max()
 
-        return lon_lower, lat_lower, lon_upper, lat_upper
+        return Bounds(min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
 
     # ------------------------------------
     # Step 2: Merge monthly ZARR files
