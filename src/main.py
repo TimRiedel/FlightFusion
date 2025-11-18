@@ -32,7 +32,7 @@ def main():
         for icao in airports:
             logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
 
-            metar_processor = MetarProcessor(icao, start_dt, end_dt, cfg["output_dir"])
+            metar_processor = MetarProcessor(icao, start_dt, end_dt, cfg["radius_km"], cfg["output_dir"])
             if step in ["all", "download"]:
                 metar_processor.download()
             if step in ["all", "parse"]:
