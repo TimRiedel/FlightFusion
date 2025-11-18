@@ -1,12 +1,10 @@
 import argparse
-import json
-import os
 from datetime import datetime
 
 from trajectories import TrajectoryProcessor
 from utils.config_loader import ALL_STEPS, ALL_TASKS, TASK_STEPS, load_config
 from utils.logger import logger
-from weather.metar_processor import MetarProcessor
+from weather import MetarProcessor, WeatherProcessor
 
 
 def main():
@@ -42,17 +40,28 @@ def main():
             if step in ["all", "process"]:
                 metar_processor.process()
 
+    if task in ["weather", "all"]:
+        for icao in airports:
+            logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
+
+            weather_processor = WeatherProcessor(icao, start_dt, end_dt, cfg["radius_km"], cfg["output_dir"], cfg["weather"])
+            if step in ["all", "download"]:
+                weather_processor.download()
+            if step in ["all", "merge"]:
+                weather_processor.merge()
+
     if task in ["flights", "all"]:
         for icao in airports:
             logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
 
-            trajectory_processor = TrajectoryProcessor(icao, start_dt, end_dt, cfg["output_dir"], cfg["flights"])
+            trajectory_processor = TrajectoryProcessor(icao, start_dt, end_dt, cfg["radius_km"], cfg["output_dir"], cfg["flights"])
             if step in ["all", "download_flightlist"]:
                 trajectory_processor.download_flightlist()
             if step in ["all", "download_trajectories"]:
                 trajectory_processor.download_trajectories()
             if step in ["all", "process"]:
                 trajectory_processor.process()
+
 
     logger.info("=======================================================================\n")
     logger.info("✅ All tasks completed successfully.\n")

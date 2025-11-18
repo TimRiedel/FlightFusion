@@ -1,11 +1,11 @@
 import os
-
+import copy
 import yaml
 
 TASK_STEPS = {
     "flights": ["download_flightlist", "download_trajectories", "process", "all"],
     "metar": ["download", "parse", "process", "all"],
-    "weather": ["download", "process", "all"],
+    "weather": ["download", "merge", "all"],
     "all": ["all"],
 }
 ALL_STEPS = set(step for steps in TASK_STEPS.values() for step in steps)
@@ -19,16 +19,15 @@ def load_config(config_path, cli_args):
         config = yaml.safe_load(f)
 
     # CLI Args take precedence over config file
-    merged_config = {
-        "airports": cli_args.airports.split(",") if cli_args.airports else config["defaults"]["airports"],
-        "start": cli_args.start or config["defaults"]["start"],
-        "end": cli_args.end or config["defaults"]["end"],
-        "output_dir": config["defaults"]["output_dir"],
-        "task": task,
-        "step": step,
-        "flights": config["flights"], 
-    }
-    return merged_config    
+    merged_config = copy.deepcopy(config)
+
+    merged_config = {**config["defaults"], **merged_config} # do not nest defaults under 'defaults', but make them top-level
+    merged_config["airports"] = cli_args.airports.split(",") if cli_args.airports else merged_config["airports"]
+    merged_config["start"] = cli_args.start or merged_config["start"] # allow CLI args to override config file
+    merged_config["end"] = cli_args.end or merged_config["end"] # allow CLI args to override config file
+    merged_config["task"] = task # allow CLI args to override config file
+    merged_config["step"] = step # allow CLI args to override config file
+    return merged_config
 
 def validate_task_step(args):
     task = args.task
