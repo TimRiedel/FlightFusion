@@ -117,8 +117,10 @@ class MetarProcessor(DatasetProcessor):
         parsed_report = {
             "airport": self.icao,
             "datetime": date.isoformat(),
-            "hour": date.hour,
             "month": date.month,
+            "temperature": self._safe_value(parsed.temperature),
+            "dewpoint": self._safe_value(parsed.dew_point),
+            "pressure": self._safe_value(parsed.altimeter),
             "wind_dir": self._safe_value(parsed.wind.degrees), 
             "wind_dir_variable": True if parsed.wind.degrees is None else False, # variable wind has no degrees
             "wind_speed": self._safe_value(parsed.wind.speed, 0),
@@ -132,9 +134,6 @@ class MetarProcessor(DatasetProcessor):
             "weather_TS": self._exists_thunderstorm(parsed),
             "weather_FG": self._exists_fog(parsed),
             "weather_SN": self._exists_precipitation_snow(parsed),
-            "temperature": self._safe_value(parsed.temperature),
-            "dewpoint": self._safe_value(parsed.dew_point),
-            "pressure": self._safe_value(parsed.altimeter)
         }
         return parsed_report
 
@@ -224,16 +223,21 @@ class MetarProcessor(DatasetProcessor):
         logger.info(f"✅ Processed {len(processed_reports)} METAR reports, saved to {path}\n")
 
     def _add_cyclic_encodings(self, processed_reports: pd.DataFrame):
-        # Cyclic encoding for wind direction, hour of day, and month of year
-        processed_reports["wind_dir_sin"] = np.sin(processed_reports["wind_dir"] * (2 * np.pi / 360))
-        processed_reports["wind_dir_cos"] = np.cos(processed_reports["wind_dir"] * (2 * np.pi / 360))
-        processed_reports["hour_sin"] = np.sin(processed_reports["hour"] * (2 * np.pi / 24))
-        processed_reports["hour_cos"] = np.cos(processed_reports["hour"] * (2 * np.pi / 24))
-        processed_reports["month_sin"] = np.sin(processed_reports["month"] * (2 * np.pi / 12))
-        processed_reports["month_cos"] = np.cos(processed_reports["month"] * (2 * np.pi / 12))
+        # Set wind dir to 0, if wind_dir is 360, because wind is always reported as 360 for direct northerly wind and never as 000
+        processed_reports.loc[processed_reports["wind_dir"] == 360, "wind_dir"] = 0
+        processed_reports["wind_dir_sin"] = np.sin(processed_reports["wind_dir"] * 2 * np.pi / 360)
+        processed_reports["wind_dir_cos"] = np.cos(processed_reports["wind_dir"] * 2 * np.pi / 360)
+        
+        minutes_in_day = 24 * 60
+        datetimes = pd.to_datetime(processed_reports["datetime"])
+        day_minutes = datetimes.dt.hour * 60 + datetimes.dt.minute
+        processed_reports["time_of_day_sin"] = np.sin(day_minutes * 2 * np.pi / minutes_in_day)
+        processed_reports["time_of_day_cos"] = np.cos(day_minutes * 2 * np.pi / minutes_in_day)
 
-        # Drop original encoded columns
-        processed_reports = processed_reports.drop(columns=["wind_dir", "hour", "month"])
+        processed_reports["month_sin"] = np.sin((processed_reports["month"] - 1) * 2 * np.pi / 12)
+        processed_reports["month_cos"] = np.cos((processed_reports["month"] - 1) * 2 * np.pi / 12)
+
+        processed_reports = processed_reports.drop(columns=["wind_dir", "month"])
         return processed_reports
 
     def _interpolate_missing_values(self, df):
@@ -262,7 +266,7 @@ class MetarProcessor(DatasetProcessor):
     def _round_numeric_columns(self, processed_reports: pd.DataFrame):
         to_int_columns = ["wind_speed", "wind_gust", "ceiling", "temperature", "dewpoint", "pressure"]
 
-        to_float_columns = ["wind_dir_sin", "wind_dir_cos", "hour_sin", "hour_cos", "month_sin", "month_cos"]
+        to_float_columns = ["wind_dir_sin", "wind_dir_cos", "time_of_day_sin", "time_of_day_cos", "month_sin", "month_cos"]
         for col in to_int_columns:
             processed_reports[col] = processed_reports[col].round().astype(int)
 
