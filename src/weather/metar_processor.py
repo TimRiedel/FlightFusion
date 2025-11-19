@@ -9,16 +9,16 @@ import numpy as np
 import pandas as pd
 import requests
 from common.dataset_processor import DatasetProcessor
-from metar_taf_parser.model.enum import CloudQuantity, CloudType, Descriptive
+from metar_taf_parser.model.enum import CloudQuantity, CloudType, Descriptive, Phenomenon
 from metar_taf_parser.parser.parser import MetarParser
 from utils.logger import logger
 
 OGIMET_BASE = "https://www.ogimet.com/cgi-bin/getmetar"
 
 class MetarProcessor(DatasetProcessor):
-    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, output_dir: str, cfg: dict = {}):
+    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, radius_km: int, output_dir: str, cfg: dict = {}):
         output_dir = os.path.join(output_dir, "metar")
-        super().__init__(icao, start_dt, end_dt, output_dir, cfg)
+        super().__init__(icao, start_dt, end_dt, radius_km, output_dir, cfg)
 
     # --------------------
     # Utility
@@ -117,21 +117,23 @@ class MetarProcessor(DatasetProcessor):
         parsed_report = {
             "airport": self.icao,
             "datetime": date.isoformat(),
-            "hour": date.hour,
             "month": date.month,
+            "temperature": self._safe_value(parsed.temperature),
+            "dewpoint": self._safe_value(parsed.dew_point),
+            "pressure": self._safe_value(parsed.altimeter),
             "wind_dir": self._safe_value(parsed.wind.degrees), 
             "wind_dir_variable": True if parsed.wind.degrees is None else False, # variable wind has no degrees
             "wind_speed": self._safe_value(parsed.wind.speed, 0),
             "wind_gust": parsed.wind.gust if parsed.wind.gust else parsed.wind.speed, # set wind gust to wind speed if not present
-            "visibility": int(parsed.visibility.distance[:-1]) if (parsed.visibility and parsed.visibility.distance != "> 10km") else 10000, # missing values for visibility set to 10000
+            "min_visibility": self._compute_min_of_visibility_and_rwy_range(parsed),
+            "trend_visibility": self._compute_trend_visibility(parsed),
             "ceiling": self._safe_value(ceiling, 45000), # missing ceiling set to 45000 ft
             "ceiling_missing": True if ceiling is None else False,
-            "clouds_TCU": any(cloud.type == CloudType.TCU for cloud in parsed.clouds),
-            "clouds_CB": any(cloud.type == CloudType.CB for cloud in parsed.clouds),
-            "weather_TS": any(condition.descriptive == Descriptive.THUNDERSTORM for condition in parsed.weather_conditions) if parsed.weather_conditions else False,
-            "temperature": self._safe_value(parsed.temperature),
-            "dewpoint": self._safe_value(parsed.dew_point),
-            "pressure": self._safe_value(parsed.altimeter)
+            "clouds_TCU": self._exists_towering_cumulus(parsed),
+            "clouds_CB": self._exists_cumulonimbus(parsed),
+            "weather_TS": self._exists_thunderstorm(parsed),
+            "weather_FG": self._exists_fog(parsed),
+            "weather_SN": self._exists_precipitation_snow(parsed),
         }
         return parsed_report
 
@@ -145,8 +147,61 @@ class MetarProcessor(DatasetProcessor):
                     min_ceiling = cloud.height
         return min_ceiling
 
+    def _get_visibility(self, parsed):
+        min_distance = 10000
+        if parsed.visibility and parsed.visibility.distance != "> 10km":
+            min_distance = int(parsed.visibility.distance[:-1])
+        return min_distance
+
+    def _compute_min_of_visibility_and_rwy_range(self, parsed):
+        min_rwy_range = 10000
+        if parsed.runways_info:
+            min_rwy_range = min(runway.min_range for runway in parsed.runways_info)
+        return min(min_rwy_range, self._get_visibility(parsed))
+
+    def _exists_towering_cumulus(self, parsed):
+        return any(cloud.type == CloudType.TCU for cloud in parsed.clouds)
+
+    def _exists_cumulonimbus(self, parsed):
+        return any(cloud.type == CloudType.CB for cloud in parsed.clouds)
+
+    def _exists_thunderstorm(self, parsed):
+        return any(condition.descriptive == Descriptive.THUNDERSTORM for condition in parsed.weather_conditions) if parsed.weather_conditions else False
+
+    def _exists_fog(self, parsed):
+        for condition in parsed.weather_conditions:
+            if any(phenomenon == Phenomenon.FOG for phenomenon in condition.phenomenons):
+                return True
+        return False
+
+    def _exists_precipitation_snow(self, parsed):
+        for condition in parsed.weather_conditions:
+            if any(phenomenon == Phenomenon.SNOW for phenomenon in condition.phenomenons):
+                return True
+        return False
+
+    def _compute_trend_visibility(self, parsed):
+        min_visibility = self._get_visibility(parsed)
+        if parsed.nosig:
+            return min_visibility
+
+        min_trend_visibility = 10000 # set to max visibility
+        trend_visibility_present = False
+        for trend in parsed.trends:
+            if trend.visibility is not None and trend.visibility.distance != "> 10km":
+                trend_visibility_present = True
+                visibility = int(trend.visibility.distance[:-1])
+                min_trend_visibility = min(min_trend_visibility, visibility)
+
+        if trend_visibility_present:
+            return min_trend_visibility
+        else:
+            return min_visibility
+
+
     def _safe_value(self, value, default=np.nan):
         return value if value is not None else default
+
 
     # --------------------
     # Step 3: Process parsed METAR reports for machine learning
@@ -161,22 +216,28 @@ class MetarProcessor(DatasetProcessor):
         processed_reports = self._interpolate_missing_values(processed_reports)
         processed_reports = self._convert_units_to_metric(processed_reports)
         processed_reports = self._convert_booleans_to_int(processed_reports)
+        processed_reports = self._round_numeric_columns(processed_reports)
 
         path = self._get_output_file_path_for("processed-metar")
         self._save_data(processed_reports, path)
         logger.info(f"✅ Processed {len(processed_reports)} METAR reports, saved to {path}\n")
 
     def _add_cyclic_encodings(self, processed_reports: pd.DataFrame):
-        # Cyclic encoding for wind direction, hour of day, and month of year
-        processed_reports["wind_dir_sin"] = np.sin(processed_reports["wind_dir"] * (2 * np.pi / 360))
-        processed_reports["wind_dir_cos"] = np.cos(processed_reports["wind_dir"] * (2 * np.pi / 360))
-        processed_reports["hour_sin"] = np.sin(processed_reports["hour"] * (2 * np.pi / 24))
-        processed_reports["hour_cos"] = np.cos(processed_reports["hour"] * (2 * np.pi / 24))
-        processed_reports["month_sin"] = np.sin(processed_reports["month"] * (2 * np.pi / 12))
-        processed_reports["month_cos"] = np.cos(processed_reports["month"] * (2 * np.pi / 12))
+        # Set wind dir to 0, if wind_dir is 360, because wind is always reported as 360 for direct northerly wind and never as 000
+        processed_reports.loc[processed_reports["wind_dir"] == 360, "wind_dir"] = 0
+        processed_reports["wind_dir_sin"] = np.sin(processed_reports["wind_dir"] * 2 * np.pi / 360)
+        processed_reports["wind_dir_cos"] = np.cos(processed_reports["wind_dir"] * 2 * np.pi / 360)
+        
+        minutes_in_day = 24 * 60
+        datetimes = pd.to_datetime(processed_reports["datetime"])
+        day_minutes = datetimes.dt.hour * 60 + datetimes.dt.minute
+        processed_reports["time_of_day_sin"] = np.sin(day_minutes * 2 * np.pi / minutes_in_day)
+        processed_reports["time_of_day_cos"] = np.cos(day_minutes * 2 * np.pi / minutes_in_day)
 
-        # Drop original encoded columns
-        processed_reports = processed_reports.drop(columns=["wind_dir", "hour", "month"])
+        processed_reports["month_sin"] = np.sin((processed_reports["month"] - 1) * 2 * np.pi / 12)
+        processed_reports["month_cos"] = np.cos((processed_reports["month"] - 1) * 2 * np.pi / 12)
+
+        processed_reports = processed_reports.drop(columns=["wind_dir", "month"])
         return processed_reports
 
     def _interpolate_missing_values(self, df):
@@ -192,14 +253,24 @@ class MetarProcessor(DatasetProcessor):
         return df.reset_index()
 
     def _convert_units_to_metric(self, processed_reports: pd.DataFrame):
-        processed_reports["temperature"] = processed_reports["temperature"] + 273.15  # Convert temperature to Kelvin
-        processed_reports["dewpoint"] = processed_reports["dewpoint"] + 273.15  # Convert dewpoint to Kelvin
         processed_reports["ceiling"] = processed_reports["ceiling"] * 0.3048  # Convert ceiling from feet to meters
         processed_reports["wind_speed"] = processed_reports["wind_speed"] * 1.852  # Convert wind speed from knots to km/h
         processed_reports["wind_gust"] = processed_reports["wind_gust"] * 1.852  # Convert wind gust from knots to km/h
         return processed_reports
 
     def _convert_booleans_to_int(self, processed_reports: pd.DataFrame):
-        bool_columns = ["wind_dir_variable", "ceiling_missing", "clouds_TCU", "clouds_CB", "weather_TS"]
+        bool_columns = processed_reports.select_dtypes(include=["bool"]).columns
         processed_reports[bool_columns] = processed_reports[bool_columns].astype(int)
         return processed_reports
+
+    def _round_numeric_columns(self, processed_reports: pd.DataFrame):
+        to_int_columns = ["wind_speed", "wind_gust", "ceiling", "temperature", "dewpoint", "pressure"]
+
+        to_float_columns = ["wind_dir_sin", "wind_dir_cos", "time_of_day_sin", "time_of_day_cos", "month_sin", "month_cos"]
+        for col in to_int_columns:
+            processed_reports[col] = processed_reports[col].round().astype(int)
+
+        for col in to_float_columns:
+            processed_reports[col] = processed_reports[col].round(6).astype(float)
+        return processed_reports
+
