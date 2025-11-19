@@ -217,6 +217,7 @@ class MetarProcessor(DatasetProcessor):
         processed_reports = self._interpolate_missing_values(processed_reports)
         processed_reports = self._convert_units_to_metric(processed_reports)
         processed_reports = self._convert_booleans_to_int(processed_reports)
+        processed_reports = self._round_numeric_columns(processed_reports)
 
         path = self._get_output_file_path_for("processed-metar")
         self._save_data(processed_reports, path)
@@ -248,14 +249,24 @@ class MetarProcessor(DatasetProcessor):
         return df.reset_index()
 
     def _convert_units_to_metric(self, processed_reports: pd.DataFrame):
-        processed_reports["temperature"] = processed_reports["temperature"] + 273.15  # Convert temperature to Kelvin
-        processed_reports["dewpoint"] = processed_reports["dewpoint"] + 273.15  # Convert dewpoint to Kelvin
         processed_reports["ceiling"] = processed_reports["ceiling"] * 0.3048  # Convert ceiling from feet to meters
         processed_reports["wind_speed"] = processed_reports["wind_speed"] * 1.852  # Convert wind speed from knots to km/h
         processed_reports["wind_gust"] = processed_reports["wind_gust"] * 1.852  # Convert wind gust from knots to km/h
         return processed_reports
 
     def _convert_booleans_to_int(self, processed_reports: pd.DataFrame):
-        bool_columns = ["wind_dir_variable", "ceiling_missing", "clouds_TCU", "clouds_CB", "weather_TS", "weather_FG", "weather_SN"]
+        bool_columns = processed_reports.select_dtypes(include=["bool"]).columns
         processed_reports[bool_columns] = processed_reports[bool_columns].astype(int)
         return processed_reports
+
+    def _round_numeric_columns(self, processed_reports: pd.DataFrame):
+        to_int_columns = ["wind_speed", "wind_gust", "ceiling", "temperature", "dewpoint", "pressure"]
+
+        to_float_columns = ["wind_dir_sin", "wind_dir_cos", "hour_sin", "hour_cos", "month_sin", "month_cos"]
+        for col in to_int_columns:
+            processed_reports[col] = processed_reports[col].round().astype(int)
+
+        for col in to_float_columns:
+            processed_reports[col] = processed_reports[col].round(6).astype(float)
+        return processed_reports
+
