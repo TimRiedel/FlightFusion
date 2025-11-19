@@ -48,7 +48,7 @@ def main():
             if step in ["all", "download"]:
                 weather_processor.download()
             if step in ["all", "merge"]:
-                weather_processor.merge()
+                weather_processor.process()
 
     if task in ["flights", "all"]:
         for icao in airports:
