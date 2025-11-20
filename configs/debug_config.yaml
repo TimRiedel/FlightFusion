@@ -3,7 +3,8 @@ defaults:
   start: "2024-01-01T00:00"
   end: "2024-01-02T23:59"
   radius_km: 300
-  output_dir: "../assets/datasets"
+  dataset_dir: "../assets/datasets"
+  cache_dir: ".cache"
   task: "all"
   step: "all"
 

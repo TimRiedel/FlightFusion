@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime
 
+from common.dataset_processor import ProcessingConfig
 from trajectories import TrajectoryProcessor
 from utils.config_loader import ALL_STEPS, ALL_TASKS, TASK_STEPS, load_config
 from utils.logger import logger
@@ -28,11 +29,20 @@ def main():
 
     logger.info(f"🚀 Starting FlightFusion pipeline for airports: {airports}, from {start_dt} to {end_dt}\n")
 
-    if task in ["metar", "all"]:
-        for icao in airports:
+    for icao in airports:
+        processing_config = ProcessingConfig(
+            icao_code=icao,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            circle_radius_km=cfg["radius_km"],
+            dataset_dir=cfg["dataset_dir"],
+            cache_dir=cfg["cache_dir"]
+        )
+
+        if task in ["metar", "all"]:
             logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
 
-            metar_processor = MetarProcessor(icao, start_dt, end_dt, cfg["radius_km"], cfg["output_dir"])
+            metar_processor = MetarProcessor(processing_config, cfg)
             if step in ["all", "download"]:
                 metar_processor.download()
             if step in ["all", "parse"]:
@@ -40,21 +50,19 @@ def main():
             if step in ["all", "process"]:
                 metar_processor.process()
 
-    if task in ["weather", "all"]:
-        for icao in airports:
+        if task in ["weather", "all"]:
             logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
 
-            weather_processor = WeatherProcessor(icao, start_dt, end_dt, cfg["radius_km"], cfg["output_dir"], cfg["weather"])
+            weather_processor = WeatherProcessor(processing_config, cfg["weather"])
             if step in ["all", "download"]:
                 weather_processor.download()
             if step in ["all", "merge"]:
-                weather_processor.merge()
+                weather_processor.process()
 
-    if task in ["flights", "all"]:
-        for icao in airports:
+        if task in ["flights", "all"]:
             logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
 
-            trajectory_processor = TrajectoryProcessor(icao, start_dt, end_dt, cfg["radius_km"], cfg["output_dir"], cfg["flights"])
+            trajectory_processor = TrajectoryProcessor(processing_config, cfg["flights"])
             if step in ["all", "download_flightlist"]:
                 trajectory_processor.download_flightlist()
             if step in ["all", "download_trajectories"]:
