@@ -5,19 +5,18 @@ import os
 from datetime import datetime, timedelta
 
 import pandas as pd
-from common.dataset_processor import DatasetProcessor
+from common.dataset_processor import DatasetProcessor, ProcessingConfig
 from traffic.core.flight import Flight
 from traffic.data import opensky
 from utils.logger import logger
 
 
 class TrajectoryProcessor(DatasetProcessor):
-    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, output_dir: str, cfg: dict):
-        output_dir = os.path.join(output_dir, "trajectories")
-        super().__init__(icao, start_dt, end_dt, output_dir, cfg)
+    def __init__(self, processing_config: ProcessingConfig, task_config: dict):
+        super().__init__(processing_config, task_type="flights", task_config=task_config, create_temp_dir=True)
 
-        self.check_runway_alignment = cfg.get("check_runway_alignment", True)
-        self.excluded_callsigns = cfg.get("excluded_callsigns", [])
+        self.check_runway_alignment = task_config.get("check_runway_alignment", True)
+        self.excluded_callsigns = task_config.get("excluded_callsigns", [])
 
     # ------------------------------------
     # Download Step 1: Flight List
@@ -33,25 +32,24 @@ class TrajectoryProcessor(DatasetProcessor):
         flightlist_df = self._remove_departures(flightlist_df)
         flightlist_df = self._remove_same_departure_arrival(flightlist_df)
 
-        path = self._get_output_file_path_for("flightlist")
+        path = self._get_temp_file_path_for("flightlist")
         self._save_data(flightlist_df, path, sortby="lastseen")
         logger.info(f"✅ Processed {len(flightlist_df)} flights, saved flightlist to {path}\n")
 
     def _get_flightlist(self) -> pd.DataFrame:
-        raw_data_path = self._get_raw_file_path_for("raw-flightlist")
+        flightlist_path = self._get_temp_file_path_for("flightlist")
 
-        if os.path.exists(raw_data_path):
+        if os.path.exists(flightlist_path):
             logger.info(f"    ✓ Found existing raw flightlist data, skipping download.")
-            flightlist_df = pd.read_parquet(raw_data_path)
+            flightlist_df = pd.read_parquet(flightlist_path)
             return flightlist_df
         else:
             logger.info(f"    → Fetching flight list from {self.start_dt} to {self.end_dt}") 
             flightlist_df = self._fetch_flight_list(self.icao, self.start_dt, self.end_dt)
             flightlist_df["flight_id"] = flightlist_df["callsign"].fillna("").str.strip() + "_" + flightlist_df["lastseen"].dt.strftime("%Y%m%d%H%M%S")
 
-            path = self._get_raw_file_path_for("flightlist")
-            self._save_data(flightlist_df, path, sortby="lastseen")
-            logger.info(f"        ✓ {len(flightlist_df)} flights saved to {path}")
+            self._save_data(flightlist_df, flightlist_path, sortby="lastseen")
+            logger.info(f"        ✓ {len(flightlist_df)} flights saved to {flightlist_path}")
             return flightlist_df
 
     def _fetch_flight_list(self, icao: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
@@ -119,7 +117,7 @@ class TrajectoryProcessor(DatasetProcessor):
                 day_trajs.append(flight.data)
 
             day_merged = pd.concat(day_trajs, ignore_index=True)
-            day_path = self._get_raw_file_path_for("trajectories", pd.to_datetime(day))
+            day_path = self._get_temp_file_path_for("trajectories", pd.to_datetime(day))
             self._save_data(day_merged, day_path, sortby="timestamp")
             logger.info(f"        ✓ Saved {len(day_merged)} trajectory points for {day} to {day_path}")
             daily_paths.append(day_path)
@@ -130,7 +128,7 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"✅ Saved merged trajectories to {out_path}")
 
     def _load_flightlist_data(self):
-        flightlist_path = self._get_output_file_path_for("flightlist")
+        flightlist_path = self._get_temp_file_path_for("flightlist")
         flightlist_df = self._load_data(flightlist_path)
         flightlist_df["_date"] = pd.to_datetime(flightlist_df["lastseen"]).dt.date
         return flightlist_df

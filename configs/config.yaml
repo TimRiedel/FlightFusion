@@ -3,13 +3,16 @@ defaults:
   start: "2024-01-01T00:00"
   end: "2024-12-31T23:59"
   radius_km: 300
-  output_dir: "../assets/datasets"
+  dataset_dir: "/sc/projects/sci-naumann/chair/tim.riedel/FlightFusion/datasets"
+  cache_dir: "/sc/projects/sci-naumann/chair/tim.riedel/FlightFusion/.cache"
   task: "all"
   step: "all"
 
 flights:
   check_runway_alignment: true
 weather:
-  dataset_name: "era5"
+  dataset_name: "cerra"
   variables: ["temperature", "u_component_of_wind", "v_component_of_wind"]
-  pressure_levels: [975, 875, 750, 600, 400, 200]
+  pressure_levels: [975, 900, 800, 600, 400, 200]
+  grid_num_x: 64
+  grid_num_y: 64

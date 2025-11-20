@@ -1,5 +1,7 @@
 import argparse
+import hashlib
 import io
+import json
 import os
 import time
 from datetime import datetime
@@ -8,7 +10,7 @@ from enum import IntEnum
 import numpy as np
 import pandas as pd
 import requests
-from common.dataset_processor import DatasetProcessor
+from common.dataset_processor import DatasetProcessor, ProcessingConfig
 from metar_taf_parser.model.enum import CloudQuantity, CloudType, Descriptive, Phenomenon
 from metar_taf_parser.parser.parser import MetarParser
 from utils.logger import logger
@@ -16,9 +18,12 @@ from utils.logger import logger
 OGIMET_BASE = "https://www.ogimet.com/cgi-bin/getmetar"
 
 class MetarProcessor(DatasetProcessor):
-    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, radius_km: int, output_dir: str, cfg: dict = {}):
-        output_dir = os.path.join(output_dir, "metar")
-        super().__init__(icao, start_dt, end_dt, radius_km, output_dir, cfg)
+    def __init__(self, processing_config: ProcessingConfig, task_config: dict = {}):
+        super().__init__(processing_config, task_type="metar", task_config=task_config, create_temp_dir=True)
+        
+        # Set up cache directory for raw METAR downloads
+        self.cache_dir = os.path.join(processing_config.cache_dir, "metar")
+        os.makedirs(self.cache_dir, exist_ok=True)
 
     # --------------------
     # Utility
@@ -26,6 +31,17 @@ class MetarProcessor(DatasetProcessor):
 
     def _make_key(self, airport: str, date_iso: str):
         return hash((airport, date_iso))
+
+    def _get_cached_file_path(self) -> str:
+        """Get hash-based cache path for raw METAR downloads"""
+        hash_content = {
+            "icao": self.icao,
+            "start_dt": str(self.start_dt),
+            "end_dt": str(self.end_dt)
+        }
+        hash_str = json.dumps(hash_content, sort_keys=True)
+        hash_val = hashlib.sha256(hash_str.encode("utf-8")).hexdigest()[:10]
+        return os.path.join(self.cache_dir, f"{self.icao}_metar_{hash_val}.parquet")
 
     
     # --------------------
@@ -35,10 +51,14 @@ class MetarProcessor(DatasetProcessor):
     def download(self):
         logger.info(f"📥 Downloading METARs for {self.icao}...")
 
+        cached_path = self._get_cached_file_path()
+        if os.path.exists(cached_path):
+            logger.info(f"    ✓ Found cached METAR data, skipping download.\n")
+            return
+
         raw_reports_df = self._fetch_raw_reports()
-        path = self._get_raw_file_path_for("metar")
-        self._save_data(raw_reports_df, path)
-        logger.info(f"✅ Saved {len(raw_reports_df)} raw METAR reports to {path}\n")
+        self._save_data(raw_reports_df, cached_path)
+        logger.info(f"✅ Saved {len(raw_reports_df)} raw METAR reports to {cached_path}\n")
 
     def _fetch_raw_reports(self):
         url = self._build_query_url()
@@ -88,7 +108,11 @@ class MetarProcessor(DatasetProcessor):
     # --------------------
 
     def parse(self):
-        raw_reports_df = self._load_data(self._get_raw_file_path_for("metar"))
+        cached_path = self._get_cached_file_path()
+        if not os.path.exists(cached_path):
+            raise FileNotFoundError(f"Cached METAR data not found at {cached_path}. Please run the download method first.")
+
+        raw_reports_df = self._load_data(cached_path)
         logger.info(f"⛅ Parsing {len(raw_reports_df)} METAR reports...")
 
         parsed_reports_map = {}
@@ -102,7 +126,7 @@ class MetarProcessor(DatasetProcessor):
                 continue
 
         parsed_reports_df = pd.DataFrame(parsed_reports_map.values())
-        path = self._get_raw_file_path_for("parsed-metar")
+        path = self._get_temp_file_path_for("parsed-metar")
         self._save_data(parsed_reports_df, path)
         logger.info(f"✅ Parsed {len(parsed_reports_df)} METAR reports, saved to {path}\n")
 
@@ -208,7 +232,7 @@ class MetarProcessor(DatasetProcessor):
     # --------------------
 
     def process(self):
-        parsed_reports_df = self._load_data(self._get_raw_file_path_for("parsed-metar"))
+        parsed_reports_df = self._load_data(self._get_temp_file_path_for("parsed-metar"))
         logger.info(f"📈 Processing {len(parsed_reports_df)} METAR reports for machine learning...")
 
         processed_reports = parsed_reports_df.copy()
@@ -218,7 +242,7 @@ class MetarProcessor(DatasetProcessor):
         processed_reports = self._convert_booleans_to_int(processed_reports)
         processed_reports = self._round_numeric_columns(processed_reports)
 
-        path = self._get_output_file_path_for("processed-metar")
+        path = self._get_output_file_path_for("metar")
         self._save_data(processed_reports, path)
         logger.info(f"✅ Processed {len(processed_reports)} METAR reports, saved to {path}\n")
 

@@ -1,38 +1,54 @@
 import os
 from datetime import datetime
+from dataclasses import dataclass
 
 import pandas as pd
 
+@dataclass
+class ProcessingConfig:
+    """Configuration object for data processing tasks."""
+    icao_code: str
+    start_dt: datetime
+    end_dt: datetime
+    circle_radius_km: int
+    dataset_dir: str
+    cache_dir: str
+
 
 class DatasetProcessor:
-    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, radius_km: int, task_asset_dir: str, cfg: dict, create_raw_data_dir: bool = True):
-        self.icao = icao.upper()
-        self.start_dt = pd.to_datetime(start_dt).tz_localize("UTC") # enforce UTC timezone
-        self.end_dt = pd.to_datetime(end_dt).tz_localize("UTC")
-        self.radius_m = radius_km * 1000
+    def __init__(self, processing_config: ProcessingConfig, task_type: str, task_config: dict = {}, create_temp_dir: bool = True):
+        self.icao = processing_config.icao_code.upper()
+        self.start_dt = pd.to_datetime(processing_config.start_dt).tz_localize("UTC") # enforce UTC timezone
+        self.end_dt = pd.to_datetime(processing_config.end_dt).tz_localize("UTC")
+        self.radius_m = processing_config.circle_radius_km * 1000
+        self.task_config = task_config
 
-        self.task_asset_dir = task_asset_dir
-        self.output_dir = os.path.join(task_asset_dir, self.icao)
+        self.output_dir = os.path.join(processing_config.dataset_dir, self.icao, task_type)
         os.makedirs(self.output_dir, exist_ok=True)
-
-        if create_raw_data_dir:
-            self.raw_data_dir = os.path.join(self.output_dir, "raw")
-            os.makedirs(self.raw_data_dir, exist_ok=True)
+        
+        # Create .temp directory for intermediate files
+        if create_temp_dir:
+            self.temp_dir = os.path.join(self.output_dir, ".temp")
+            os.makedirs(self.temp_dir, exist_ok=True)
+        else:
+            self.temp_dir = None
 
         self.all_days = pd.date_range(start=self.start_dt, end=self.end_dt, freq="D")
 
     # --------------------
     # Utility
     # --------------------
-    def _get_raw_file_path_for(self, data_type: str, day: datetime = None) -> str:
+    def _get_temp_file_path_for(self, data_type: str, day: datetime = None) -> str:
+        """Get path for temporary/intermediate files (stored in .temp directory)"""
         if day is None:
             return os.path.join(
-                self.raw_data_dir,
+                self.temp_dir,
                 f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.parquet"
             )
-        return os.path.join(self.raw_data_dir, f"{self.icao}_{data_type}_{day.date()}.parquet")
+        return os.path.join(self.temp_dir, f"{self.icao}_{data_type}_{day.date()}.parquet")
 
     def _get_output_file_path_for(self, data_type: str) -> str:
+        """Get path for final output files (stored directly in airport directory)"""
         return os.path.join(self.output_dir, f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.parquet")
 
     def _save_data(self, df: pd.DataFrame, path: str, sortby: str = None):

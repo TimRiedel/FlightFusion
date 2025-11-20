@@ -11,40 +11,39 @@ import numpy as np
 from traffic.data import airports
 
 from weather.weather_downloader import CerraDownloader, Era5Downloader
-from common.dataset_processor import DatasetProcessor
+from common.dataset_processor import DatasetProcessor, ProcessingConfig
 from common.projections import Bounds, get_circle_around_location, get_curvilinear_grid_around_location
 from utils.logger import logger
 from utils.output_capture import console_output_prefix
 
 class WeatherProcessor(DatasetProcessor):
-    def __init__(self, icao: str, start_dt: datetime, end_dt: datetime, radius_km: int, output_dir: str, cfg: dict = {},):
-        output_dir = os.path.join(output_dir, "weather")
-        super().__init__(icao, start_dt, end_dt, radius_km, output_dir, cfg, create_raw_data_dir=False)
+    def __init__(self, processing_config: ProcessingConfig, task_config: dict = {},):
+        super().__init__(processing_config, task_type="weather", task_config=task_config, create_temp_dir=False)
 
-        # We create a separate raw data directory, because the raw data covers multiple airports
-        # which is why we can reuse one download for multiple airports.
-        self.raw_data_dir = os.path.join(self.task_asset_dir, "raw")
-        os.makedirs(self.raw_data_dir, exist_ok=True)
+        # Set up cache directory for raw weather downloads
+        self.cache_dir = os.path.join(processing_config.cache_dir, "weather")
+        os.makedirs(self.cache_dir, exist_ok=True)
         
-        self.dataset_name = cfg.get("dataset_name")
-        self.variables = cfg.get("variables")
-        self.pressure_levels = cfg.get("pressure_levels")
+        self.dataset_name = task_config.get("dataset_name")
+        self.variables = task_config.get("variables")
+        self.pressure_levels = task_config.get("pressure_levels")
 
         if self.dataset_name == "cerra":
-            self.weather_downloader = CerraDownloader(icao, self.dataset_name, output_dir)
+            self.weather_downloader = CerraDownloader(self.icao, self.dataset_name, self.output_dir)
         elif self.dataset_name == "era5":
-            self.weather_downloader = Era5Downloader(icao, self.dataset_name, output_dir)
+            self.weather_downloader = Era5Downloader(self.icao, self.dataset_name, self.output_dir)
         else:
             raise ValueError(f"Invalid dataset: {self.dataset_name}")
 
-        self.grid_n_x = cfg.get("grid_num_x")
-        self.grid_n_y = cfg.get("grid_num_y")
+        self.grid_n_x = task_config.get("grid_num_x")
+        self.grid_n_y = task_config.get("grid_num_y")
 
     # ------------------------------------
     # Utils
     # ------------------------------------
 
     def _get_raw_file_path_for(self, year: int, month: int):
+        """Get path for raw weather GRIB files (stored in cache directory)"""
         hash_content = {
             "dataset_name": self.dataset_name,
             "variables": self.variables,
@@ -54,7 +53,7 @@ class WeatherProcessor(DatasetProcessor):
         }
         hash_str = json.dumps(hash_content, sort_keys=True)
         hash_val = hashlib.sha256(hash_str.encode("utf-8")).hexdigest()[:10]
-        return os.path.join(self.raw_data_dir, f"{self.dataset_name}_{year}-{month:02d}-{hash_val}.grib")
+        return os.path.join(self.cache_dir, f"{self.dataset_name}_{year}-{month:02d}-{hash_val}.grib")
 
     def _get_output_file_path_for(self, data_type: str):
         return super()._get_output_file_path_for(data_type).replace("parquet", "zarr")
@@ -110,7 +109,7 @@ class WeatherProcessor(DatasetProcessor):
 
 
     # ------------------------------------
-    # Step 2: Merge monthly ZARR files
+    # Step 2: Process and merge monthly weather data
     # ------------------------------------
 
     def process(self):
@@ -127,12 +126,11 @@ class WeatherProcessor(DatasetProcessor):
             grib_path = self._get_raw_file_path_for(year, month)
             logger.info(f"    - Processing month {month:02d}-{year}...")
 
-            # Convert GRIB to ZARR and regrid if needed
             if not os.path.exists(grib_path):
                 logger.warning(f"        ✗ {month:02d}-{year} GRIB file not found under {grib_path}. Skipping...")
                 continue
 
-            logger.info(f"        - Bringing GRIB data into the correct format. This might take a while...")
+            logger.info(f"        - Bringing GRIB data into the correct format...")
             month_ds = self.weather_downloader.retrieve_xr_dataset_from_grib(grib_path)
 
             logger.info(f"        - Regridding and cropping data to airport circle bounds...")
@@ -144,7 +142,7 @@ class WeatherProcessor(DatasetProcessor):
                 merged_exists = True
             else:
                 month_ds.to_zarr(output_path, mode="a", consolidated=False, append_dim="time", zarr_format=3)
-            logger.info(f"        ✓ Finished regridding and cropping. Merged ZARR to {output_path}.")
+            logger.info(f"        ✓ Finished regridding and cropping. Merged Zarr to {output_path}.")
 
         logger.info(f"✅ Finished merging {self.dataset_name.upper()} weather data.\n")
 

@@ -4,7 +4,7 @@ import sys
 from datetime import datetime
 
 # --- Create log directory ---
-log_dir = "logs"
+log_dir = ".logs"
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, f"{datetime.utcnow():%Y-%m-%dT%H:%M:%S}.log")
 
