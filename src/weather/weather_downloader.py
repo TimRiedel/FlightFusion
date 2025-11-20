@@ -32,7 +32,7 @@ class CerraDownloader(WeatherDownloader):
             "month": [f"{month:02d}"],
             "day": days,
             "time": ["00:00", "06:00", "12:00", "18:00"],
-            "leadtime_hour": ["3", "6"],
+            "leadtime_hour": ["6", "9"],
             "data_format": "grib"
         }
         

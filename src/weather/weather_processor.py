@@ -1,7 +1,7 @@
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from calendar import monthrange
 
 import shapely
@@ -29,6 +29,8 @@ class WeatherProcessor(DatasetProcessor):
         self.pressure_levels = task_config.get("pressure_levels")
 
         if self.dataset_name == "cerra":
+            # We are using 6-hourly forecast data from CERRA, so we need to start at least 6 hours before the start date.
+            self.start_dt = self.start_dt - timedelta(days=1)
             self.weather_downloader = CerraDownloader(self.icao, self.dataset_name, self.output_dir)
         elif self.dataset_name == "era5":
             self.weather_downloader = Era5Downloader(self.icao, self.dataset_name, self.output_dir)
@@ -135,6 +137,7 @@ class WeatherProcessor(DatasetProcessor):
 
             logger.info(f"        - Regridding and cropping data to airport circle bounds...")
             month_ds = self._regrid_dataset_to_airport(month_ds, exact_curvilinear_grid=True)
+            month_ds.attrs["dataset"] = self.dataset_name
 
 
             if not merged_exists:
