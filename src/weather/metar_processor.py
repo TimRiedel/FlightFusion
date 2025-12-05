@@ -14,6 +14,7 @@ from common.dataset_processor import DatasetProcessor, ProcessingConfig
 from metar_taf_parser.model.enum import CloudQuantity, CloudType, Descriptive, Phenomenon
 from metar_taf_parser.parser.parser import MetarParser
 from utils.logger import logger
+from utils.cache import Cache
 
 OGIMET_BASE = "https://www.ogimet.com/cgi-bin/getmetar"
 
@@ -21,9 +22,7 @@ class MetarProcessor(DatasetProcessor):
     def __init__(self, processing_config: ProcessingConfig, task_config: dict = {}):
         super().__init__(processing_config, task_type="metar", task_config=task_config, create_temp_dir=True)
         
-        # Set up cache directory for raw METAR downloads
-        self.cache_dir = os.path.join(processing_config.cache_dir, "metar")
-        os.makedirs(self.cache_dir, exist_ok=True)
+        self.cache = Cache(processing_config.cache_dir, "metar", self.icao)
 
     # --------------------
     # Utility
@@ -32,16 +31,13 @@ class MetarProcessor(DatasetProcessor):
     def _make_key(self, airport: str, date_iso: str):
         return hash((airport, date_iso))
 
-    def _get_cached_file_path(self) -> str:
-        """Get hash-based cache path for raw METAR downloads"""
-        hash_content = {
+    def _get_request_config(self):
+        request_config = {
             "icao": self.icao,
             "start_dt": str(self.start_dt),
             "end_dt": str(self.end_dt)
         }
-        hash_str = json.dumps(hash_content, sort_keys=True)
-        hash_val = hashlib.sha256(hash_str.encode("utf-8")).hexdigest()[:10]
-        return os.path.join(self.cache_dir, f"{self.icao}_metar_{hash_val}.parquet")
+        return request_config
 
     
     # --------------------
@@ -51,14 +47,15 @@ class MetarProcessor(DatasetProcessor):
     def download(self):
         logger.info(f"📥 Downloading METARs for {self.icao}...")
 
-        cached_path = self._get_cached_file_path()
-        if os.path.exists(cached_path):
+        request_config = self._get_request_config()
+        file_path, exists_cached = self.cache.get_file_path(request_config)
+        if exists_cached:
             logger.info(f"    ✓ Found cached METAR data, skipping download.\n")
             return
 
         raw_reports_df = self._fetch_raw_reports()
-        self._save_data(raw_reports_df, cached_path)
-        logger.info(f"✅ Saved {len(raw_reports_df)} raw METAR reports to {cached_path}\n")
+        self._save_data(raw_reports_df, file_path)
+        logger.info(f"✅ Saved {len(raw_reports_df)} raw METAR reports to {file_path}\n")
 
     def _fetch_raw_reports(self):
         url = self._build_query_url()
@@ -108,11 +105,12 @@ class MetarProcessor(DatasetProcessor):
     # --------------------
 
     def parse(self):
-        cached_path = self._get_cached_file_path()
-        if not os.path.exists(cached_path):
-            raise FileNotFoundError(f"Cached METAR data not found at {cached_path}. Please run the download method first.")
+        request_config = self._get_request_config()
+        file_path, exists_cached = self.cache.get_file_path(request_config)
+        if not exists_cached:
+            raise FileNotFoundError(f"Cached METAR data not found at {file_path}. Please run the download method first.")
 
-        raw_reports_df = self._load_data(cached_path)
+        raw_reports_df = self._load_data(file_path)
         logger.info(f"⛅ Parsing {len(raw_reports_df)} METAR reports...")
 
         parsed_reports_map = {}

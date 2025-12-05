@@ -14,15 +14,14 @@ from weather.weather_downloader import CerraDownloader, Era5Downloader
 from common.dataset_processor import DatasetProcessor, ProcessingConfig
 from common.projections import Bounds, get_circle_around_location, get_curvilinear_grid_around_location
 from utils.logger import logger
+from utils.cache import Cache
 from utils.output_capture import console_output_prefix
 
 class WeatherProcessor(DatasetProcessor):
     def __init__(self, processing_config: ProcessingConfig, task_config: dict = {},):
         super().__init__(processing_config, task_type="weather", task_config=task_config, create_temp_dir=False)
 
-        # Set up cache directory for raw weather downloads
-        self.cache_dir = os.path.join(processing_config.cache_dir, "weather")
-        os.makedirs(self.cache_dir, exist_ok=True)
+        self.cache = Cache(processing_config.cache_dir, "weather", self.icao)
         
         self.dataset_name = task_config.get("dataset_name")
         self.variables = task_config.get("variables")
@@ -44,21 +43,17 @@ class WeatherProcessor(DatasetProcessor):
     # Utils
     # ------------------------------------
 
-    def _get_raw_file_path_for(self, year: int, month: int):
-        """Get path for raw weather GRIB files (stored in cache directory)"""
-        hash_content = {
+    def _get_request_config(self, year: int, month: int):
+        request_config = {
             "dataset_name": self.dataset_name,
             "variables": self.variables,
             "pressure_levels": self.pressure_levels,
             "start_dt": str(self.start_dt),
-            "end_dt": str(self.end_dt)
+            "end_dt": str(self.end_dt),
+            "year": year,
+            "month": month,
         }
-        hash_str = json.dumps(hash_content, sort_keys=True)
-        hash_val = hashlib.sha256(hash_str.encode("utf-8")).hexdigest()[:10]
-        return os.path.join(self.cache_dir, f"{self.dataset_name}_{year}-{month:02d}-{hash_val}.grib")
-
-    def _get_output_file_path_for(self, data_type: str):
-        return super()._get_output_file_path_for(data_type).replace("parquet", "zarr")
+        return request_config
 
     def _get_months_to_download(self) -> list[tuple[int, int]]:
         """Get all (year, month) tuples that overlap with the date range."""
@@ -85,6 +80,7 @@ class WeatherProcessor(DatasetProcessor):
         days = [f"{day:02d}" for day in range(start_day, end_day + 1)]
         return days
 
+
     # ------------------------------------
     # Step 1: Download and crop monthly files and save as ZARR
     # ------------------------------------
@@ -95,17 +91,16 @@ class WeatherProcessor(DatasetProcessor):
         
         for year, month in months_to_download:
             days = self._get_days_to_download(year, month)
-            grib_path = self._get_raw_file_path_for(year, month)
-            exists_raw_grib = os.path.exists(grib_path)
+            request_config = self._get_request_config(year, month)
+            file_path, exists_cached = self.cache.get_file_path(request_config)
 
-            if exists_raw_grib:
+            if exists_cached:
                 logger.info(f"    - Month {month:02d}-{year} already downloaded with same configuration. Skipping download.")
             else:
                 logger.info(f"    - Downloading {len(days)} days for {month:02d}-{year}...")
                 with console_output_prefix("        | "):
-                    self.weather_downloader.fetch_month(year, month, days, self.variables, self.pressure_levels, grib_path)
-                logger.info(f"        ✓ Finished downloading. Saved GRIB to {grib_path}.")
-
+                    self.weather_downloader.fetch_month(year, month, days, self.variables, self.pressure_levels, file_path)
+                logger.info(f"        ✓ Finished downloading. Saved GRIB to {file_path}.")
 
         logger.info(f"✅ Finished downloading {self.dataset_name.upper()} reanalysis data for {self.icao}.\n")
 
@@ -115,7 +110,7 @@ class WeatherProcessor(DatasetProcessor):
     # ------------------------------------
 
     def process(self):
-        output_path = self._get_output_file_path_for("weather")
+        output_path = self._get_output_file_path_for("weather", extension="zarr")
         logger.info(f"📦 Merging {self.dataset_name.upper()} reanalysis data...")
 
         months = self._get_months_to_download()
@@ -125,20 +120,19 @@ class WeatherProcessor(DatasetProcessor):
             return
 
         for year, month in months:
-            grib_path = self._get_raw_file_path_for(year, month)
+            request_config = self._get_request_config(year, month)
+            file_path, exists_cached = self.cache.get_file_path(request_config)
             logger.info(f"    - Processing month {month:02d}-{year}...")
 
-            if not os.path.exists(grib_path):
-                logger.warning(f"        ✗ {month:02d}-{year} GRIB file not found under {grib_path}. Skipping...")
-                continue
+            if not exists_cached:
+                raise FileNotFoundError(f"Cached {self.dataset_name.upper()} data not found at {file_path}. Please run the download method first.")
 
             logger.info(f"        - Bringing GRIB data into the correct format...")
-            month_ds = self.weather_downloader.retrieve_xr_dataset_from_grib(grib_path)
+            month_ds = self.weather_downloader.retrieve_xr_dataset_from_grib(file_path)
 
             logger.info(f"        - Regridding and cropping data to airport circle bounds...")
             month_ds = self._regrid_dataset_to_airport(month_ds, exact_curvilinear_grid=True)
             month_ds.attrs["dataset"] = self.dataset_name
-
 
             if not merged_exists:
                 month_ds.to_zarr(output_path, mode="w", consolidated=False, zarr_format=3)
@@ -157,9 +151,9 @@ class WeatherProcessor(DatasetProcessor):
             regridded_ds = self._regrid_dataset_curvilinear(ds, lat2d, lon2d)
             return regridded_ds
         else:
-            circle = get_circle_around_location(lat, lon, self.radius_m)
-            bounds = self._get_enclosing_weather_bounds(ds, circle) 
+            bounds = self._get_enclosing_weather_bounds(ds, self.airport_circle) 
             regridded_ds = self._regrid_dataset_regular(ds, bounds=bounds, num_lat=self.grid_n_x, num_lon=self.grid_n_y)
+            return regridded_ds
 
     def _regrid_dataset_curvilinear(self, ds: xr.Dataset, lat2d: np.ndarray, lon2d: np.ndarray):
         ds_out = xr.Dataset(
