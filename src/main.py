@@ -14,12 +14,11 @@ def main():
     parser.add_argument("--start", type=str, help="Start date/time (YYYY-MM-DDTHH:MM)")
     parser.add_argument("--end", type=str, help="End date/time (YYYY-MM-DDTHH:MM)")
     parser.add_argument("--task", choices=ALL_TASKS, default="all", help="Task to execute in the pipeline.")
-    parser.add_argument("--step", choices=ALL_STEPS, default="all", help=f"Which step to execute from the specified task. Step 'all' is available for every task. For task 'flights': {', '.join(TASK_STEPS['flights'])}. For task 'metar': {', '.join(TASK_STEPS['metar'])}. For task 'weather': {', '.join(TASK_STEPS['weather'])}.")
+    parser.add_argument("--step", choices=ALL_STEPS, default="all", help=f"Which step to execute from the specified task. Step 'all' is available for every task. For task 'flights': {', '.join(TASK_STEPS['trajectories'])}. For task 'metar': {', '.join(TASK_STEPS['metar'])}. For task 'weather': {', '.join(TASK_STEPS['weather'])}.")
     parser.add_argument("--config", default="debug_config.yaml", help="Path to config file")
 
     args = parser.parse_args()
     cfg = load_config(args.config, args)
-
 
     airports = cfg["airports"]
     start_dt = datetime.fromisoformat(cfg["start"])
@@ -40,7 +39,7 @@ def main():
         )
 
         if task in ["metar", "all"]:
-            logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
+            logger.info(f"==================== Running task 'metar' for {icao} ====================\n")
 
             metar_processor = MetarProcessor(processing_config, cfg)
             if step in ["all", "download"]:
@@ -51,7 +50,7 @@ def main():
                 metar_processor.process()
 
         if task in ["weather", "all"]:
-            logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
+            logger.info(f"==================== Running task 'weather' for {icao} ====================\n")
 
             weather_processor = WeatherProcessor(processing_config, cfg["weather"])
             if step in ["all", "download"]:
@@ -59,16 +58,14 @@ def main():
             if step in ["all", "merge"]:
                 weather_processor.process()
 
-        if task in ["flights", "all"]:
-            logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
+        if task in ["trajectories", "all"]:
+            logger.info(f"==================== Running task 'trajectories' for {icao} ====================\n")
 
-            trajectory_processor = TrajectoryProcessor(processing_config, cfg["flights"])
-            if step in ["all", "download_flightlist"]:
-                trajectory_processor.download_flightlist()
-            if step in ["all", "download_trajectories"]:
+            trajectory_processor = TrajectoryProcessor(processing_config, cfg["trajectories"])
+            if step in ["all", "download"]:
                 trajectory_processor.download_trajectories()
             if step in ["all", "process"]:
-                trajectory_processor.process()
+                trajectory_processor.process_trajectories()
 
 
     logger.info("=======================================================================\n")

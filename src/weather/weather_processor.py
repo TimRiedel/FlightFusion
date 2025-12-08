@@ -116,7 +116,7 @@ class WeatherProcessor(DatasetProcessor):
         months = self._get_months_to_download()
         merged_exists = os.path.exists(output_path)
         if merged_exists:
-            logger.info(f"    ✗ Merged ZARR file already exists under {output_path}. Skipping processing and merging...")
+            logger.info(f"    ✗ Merged ZARR file already exists under {output_path}. Skipping processing and merging...\n")
             return
 
         for year, month in months:
