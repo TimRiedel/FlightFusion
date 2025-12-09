@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from traffic.core import Traffic, Flight
 
-from common.great_circle_calculations import haversine_distance, haversine_bearing
+from .great_circle_calculations import haversine_distance
 
 
 def assign_flight_id(traffic: Traffic, split_by_gap: bool = True, gap_threshold_minutes: int = 60) -> Traffic:

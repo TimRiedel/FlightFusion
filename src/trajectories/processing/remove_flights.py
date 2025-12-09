@@ -6,7 +6,7 @@ from traffic.core import FlightIterator, Traffic, Flight
 from traffic.data import airports
 from traffic.data.basic.runways import Threshold
 
-from common.great_circle_calculations import haversine_bearing, haversine_distance
+from .great_circle_calculations import haversine_bearing, haversine_distance
 from .compute_features import assign_rolling_cumulative_track_change
 from .filter_traffic import filter_traffic_by_flight_ids
 
