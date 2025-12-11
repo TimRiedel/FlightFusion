@@ -1,6 +1,7 @@
 
 import numpy as np
 import pandas as pd
+import pyproj
 from traffic.core import Traffic, Flight
 
 from .great_circle_calculations import haversine_distance
@@ -211,3 +212,81 @@ def assign_rolling_cumulative_track_change(flight: Flight, time_window_seconds: 
     flight_df = flight_df.reset_index() # Reset index to restore timestamp as a column
     flight_df['timestamp'] = pd.to_datetime(flight_df['timestamp'])
     return Flight(flight_df)
+
+
+def assign_speed_components(flight: Flight, ref_lon: float, ref_lat: float) -> Flight:
+    """
+    Assign speed components (spdx, spdy, spdz) to a flight trajectory.
+
+    Coordinates are projected into an Azimuthal Equidistant (AEQD) map projection
+    centered at (ref_lat, ref_lon). Differences in x/y (meters) are divided by 
+    time differences to obtain horizontal speed components:
+
+        spdx = dx/dt   (AEQD x-direction, roughly eastward near the center)
+        spdy = dy/dt   (AEQD y-direction, roughly northward near the center)
+
+    Vertical speed (spdz) is computed from altitude differences. Altitudes in 
+    feet are converted to meters before differencing.
+
+    Parameters
+    ----------
+    flight : Flight
+        Flight object containing 'timestamp', 'latitude', 'longitude',
+        and 'altitude' (in feet).
+    ref_lon : float
+        Reference longitude for AEQD projection.
+    ref_lat : float
+        Reference latitude for AEQD projection.
+
+    Returns
+    -------
+    Flight
+        Flight with added 'spdx', 'spdy', 'spdz' in m/s.
+    """
+    import numpy as np
+    import pyproj
+
+    df = flight.data.copy()
+    df = df.sort_values("timestamp").reset_index(drop=True)
+
+    # Time differences in seconds
+    dt = df["timestamp"].diff().dt.total_seconds().to_numpy()
+
+    # AEQD projection
+    transformer = pyproj.Transformer.from_crs(
+        pyproj.CRS("EPSG:4326"),
+        pyproj.CRS.from_proj4(
+            f"+proj=aeqd +lat_0={ref_lat} +lon_0={ref_lon} +datum=WGS84 +units=m +no_defs"
+        ),
+        always_xy=True,
+    )
+
+    # Project all coordinates once
+    x, y = transformer.transform(df["longitude"].to_numpy(),
+                                 df["latitude"].to_numpy())
+
+    # Horizontal differences
+    dx = np.diff(x, prepend=x[0])
+    dy = np.diff(y, prepend=y[0])
+
+    # Convert altitude (ft → m) then diff
+    alt_m = df["altitude"].to_numpy() * 0.3048
+    dz = np.diff(alt_m, prepend=alt_m[0])
+
+    # Avoid divide-by-zero for first point or any repeated timestamps
+    valid = dt > 0
+
+    spdx = np.zeros_like(dx, dtype=float)
+    spdy = np.zeros_like(dy, dtype=float)
+    spdz = np.zeros_like(dz, dtype=float)
+
+    spdx[valid] = dx[valid] / dt[valid]
+    spdy[valid] = dy[valid] / dt[valid]
+    spdz[valid] = dz[valid] / dt[valid]
+
+    # Assign back
+    df["spdx"] = np.round(spdx, 1)
+    df["spdy"] = np.round(spdy, 1)
+    df["spdz"] = np.round(spdz, 1)
+
+    return Flight(df)

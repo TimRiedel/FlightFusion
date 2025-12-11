@@ -112,6 +112,9 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Removing invalid flights...")
         traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
 
+        logger.info(f"    - Assigning speed components...")
+        traffic = self._assign_speed_components(traffic)
+
         logger.info(f"    - Saving processed trajectories...")
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._save_data(traffic.data, processed_trajectories_path)
@@ -233,6 +236,13 @@ class TrajectoryProcessor(DatasetProcessor):
         
         removed_traffic = Traffic(pd.concat(removed_traffic_dfs, ignore_index=True)) if removed_traffic_dfs else Traffic(pd.DataFrame())
         return processed_traffic, removed_traffic
+    
+    def assign_speed_components(self, traffic: Traffic) -> Traffic:
+        flights = []
+        for flight in traffic:
+            flight = assign_speed_components(flight)
+            flights.append(flight)
+        return Traffic.from_flights(flights)
 
     def _log_removal_reasons(self, reasons: list[str]):
         for reason in reasons:
