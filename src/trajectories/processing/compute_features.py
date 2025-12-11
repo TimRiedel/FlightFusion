@@ -75,6 +75,27 @@ def assign_flight_id(traffic: Traffic, split_by_gap: bool = True, gap_threshold_
     return Traffic(result_df)
 
 
+def assign_flight_sample_id(flight: Flight, sample_index: int) -> Flight:
+    """
+    Assigns a sample index to a flight, e.g. "flight_id_S1", "flight_id_S2", etc.
+
+    Parameters
+    -------
+    flight : Flight
+        Flight object containing trajectory data with flight_id column.
+    sample_index : int
+        Sample index to assign to the flight.
+
+    Returns
+    -------
+    Flight
+        Flight object with 'flight_id' column updated with the sample index.
+    """
+    flight_df = flight.data.copy()
+    flight_df['flight_id'] = flight_df['flight_id'] + f"_S{sample_index}"
+    return Flight(flight_df)
+
+
 def assign_distance_to_target(traffic: Traffic, lat: float, lon: float) -> Traffic:
     """
     Assigns distance to a target location for each point in the trajectory.
