@@ -12,6 +12,7 @@ defaults:
 trajectories:
   traffic_type: "arrivals"      # "all", "arrivals", "departures"
   crop_to_circle: true
+  drop_attributes: ["alert", "spi", "geoaltitude", "last_position", "lastcontact", "serials", "hour", "onground"]
 
   process:
     filter_traffic_by_airlines:

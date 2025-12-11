@@ -29,6 +29,29 @@ def crop_traffic_to_circle(traffic: Union[Traffic, Flight], circle_wgs84: Polygo
     return traffic
 
 
+def drop_irrelevant_attributes(
+    traffic: Traffic,
+    attributes: list[str] = ["alert", "spi", "geoaltitude", "last_position", "lastcontact", "serials", "hour"]
+) -> Traffic:
+    """
+    Drops specified columns (attributes) from a Traffic object.
+
+    Parameters
+    ----------
+    traffic : Traffic
+        The Traffic object containing trajectory data.
+    attributes : list[str], optional
+        List of attribute (column) names to remove from the underlying DataFrame.
+        Defaults to ["alert", "spi", "geoaltitude", "last_position", "lastcontact", "serials", "hour"].
+
+    Returns
+    -------
+    Traffic
+        New Traffic object with the specified columns removed.
+    """
+    return traffic.drop(columns=attributes)
+
+
 def remove_nan_values(trajectory: Union[Flight, Traffic], attribute: str) -> Union[Flight, Traffic]:
     """
     Removes rows with NaN values for a specified attribute from a trajectory.
@@ -86,6 +109,9 @@ def remove_duplicate_positions(flight: Flight) -> Flight:
     
     flight_df["is_duplicate"] = is_consecutive_duplicate
     flight_df = flight_df[~is_consecutive_duplicate].reset_index(drop=True)
+    
+    # Remove temporary column used for duplicate detection
+    flight_df = flight_df.drop(columns=['is_duplicate'], errors='ignore')
 
     return Flight(flight_df)
 
@@ -179,12 +205,12 @@ def remove_outliers(flight: Flight, attribute: str, threshold: float, window_siz
         outliers = pd.Series([False] * len(flight_df))
     
     if handle_outliers == "drop":
-        # Drop the outliers
         flight_df = flight_df[~outliers]
     elif handle_outliers == "interpolate":
-        # Interpolate the missing values
         flight_df.loc[outliers, attribute] = np.nan
         flight_df[attribute] = flight_df[attribute].interpolate(method='linear')
+    
+    flight_df = flight_df.drop(columns=[f"rolling_mean_{attribute}", f"{attribute}_deviation"], errors='ignore')
     return Flight(flight_df)
 
 
@@ -304,4 +330,3 @@ def clip_altitude(trajectory: Union[Flight, Traffic], lower_limit: int = 0, uppe
         return Traffic(trajectory_df)
     else:
         return Flight(trajectory_df)
-

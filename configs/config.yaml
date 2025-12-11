@@ -11,11 +11,14 @@ defaults:
 trajectories:
   traffic_type: "arrivals"      # "all", "arrivals", "departures"
   crop_to_circle: true
+  drop_attributes: ["alert", "spi", "geoaltitude", "last_position", "lastcontact", "serials", "hour", "onground"]
+
   process:
     filter_traffic_by_airlines:
       enabled: true
       excluded_callsigns: ["CHX", "GAF", "BPO", "FCK", "AMB", "DCA", "PBW", "HUM", "DIL"]
       top_n_airlines: 100 # If None, no filtering is applied.
+
     clean: # Cleaning steps
       remove_outliers_altitude:
         threshold: 300
@@ -28,6 +31,7 @@ trajectories:
       remove_lateral_outliers:
         window_size: 100
         deviation_factor: 10
+
     remove_flights: # Flight removal steps
       remove_small_duration:
         enabled: true
@@ -44,6 +48,7 @@ trajectories:
         enabled: true
         track_threshold: 330
         time_window_seconds: 500
+
 weather:
   dataset_name: "cerra"
   variables: ["temperature", "u_component_of_wind", "v_component_of_wind"]

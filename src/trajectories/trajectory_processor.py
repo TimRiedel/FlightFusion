@@ -23,6 +23,7 @@ class TrajectoryProcessor(DatasetProcessor):
 
         self.traffic_type = task_config["traffic_type"]
         self.crop_to_circle = task_config["crop_to_circle"]
+        self.drop_attributes = task_config.get("drop_attributes", [])
         self.process_config = task_config["process"]
 
     # ------------------------------------
@@ -67,13 +68,14 @@ class TrajectoryProcessor(DatasetProcessor):
                 continue
 
             traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
+            traffic = drop_irrelevant_attributes(traffic, self.drop_attributes)
             traffic = assign_flight_id(traffic)
             traffic = assign_distance_to_target(traffic, lat, lon)
             if self.crop_to_circle:
                 traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
             self._save_data(traffic.data, cache_path)
-            logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to {cache_path}.")
+            logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to cache {cache_path}.")
             all_traffic_dfs.append(traffic.data)
 
         logger.info(f"    - Concatenating all trajectories into a single file...")
@@ -83,6 +85,11 @@ class TrajectoryProcessor(DatasetProcessor):
 
         logger.info(f"✅ Finished downloading trajectories for {self.icao}. Saved to {all_trajectories_path}.\n")
 
+
+    # ------------------------------------
+    # Step 2: Process trajectories
+    # ------------------------------------
+
     def process_trajectories(self):
         logger.info(f"🧹 Processing trajectories for {self.icao}...")
 
@@ -90,7 +97,6 @@ class TrajectoryProcessor(DatasetProcessor):
         if not os.path.exists(all_trajectories_path):
             raise FileNotFoundError(f"Cached trajectories not found at {all_trajectories_path}. Please run the download method first.")
 
-        # Filter trajectories by traffic type
         traffic = Traffic(self._load_data(all_trajectories_path))
         traffic = filter_traffic_by_type(traffic, self.traffic_type)
         if traffic.data.empty:
@@ -103,9 +109,9 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Cleaning trajectories (removing outliers, duplicates, NaN values)...")
         traffic = self._clean_trajectories(traffic)
 
+        logger.info(f"    - Removing invalid flights...")
         traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
 
-        # Save processed trajectories
         logger.info(f"    - Saving processed trajectories...")
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._save_data(traffic.data, processed_trajectories_path)

@@ -200,8 +200,9 @@ def remove_flights_with_go_around_holding(traffic: Traffic, icao: str, track_thr
             removal_reasons.append(f"Flight {flight.flight_id} has a go-around track change or holding.")
             continue
 
-
     valid_traffic, removed_traffic = filter_traffic_by_flight_ids(traffic, removed_flight_ids)
+    valid_traffic = valid_traffic.drop(columns=['rolling_cumulative_track_change', 'track_diff'])
+    removed_traffic = removed_traffic.drop(columns=['rolling_cumulative_track_change', 'track_diff'])
     return valid_traffic, removed_traffic, removal_reasons
 
 
