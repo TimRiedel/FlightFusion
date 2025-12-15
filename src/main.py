@@ -66,7 +66,8 @@ def main():
                 trajectory_processor.download_trajectories()
             if step in ["all", "process"]:
                 trajectory_processor.process_trajectories()
-
+            if step in ["all", "create_training_data"]:
+                trajectory_processor.create_training_data()
 
     logger.info("=======================================================================\n")
     logger.info("✅ All tasks completed successfully.\n")

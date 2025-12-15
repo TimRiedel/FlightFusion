@@ -1,7 +1,7 @@
 defaults:
   airports: ["EDDB"]
   start: "2024-01-01T00:00"
-  end: "2024-01-02T23:59"
+  end: "2024-01-01T23:59"
   radius_km: 300
   dataset_dir: "../assets/datasets"
   cache_dir: ".cache"
@@ -49,6 +49,13 @@ trajectories:
         enabled: true
         track_threshold: 330
         time_window_seconds: 500
+
+  create_training_data:
+    resampling_rate_seconds: 20
+    input_time_minutes: 5
+    horizon_time_minutes: 40
+    data_period_minutes: 5
+    min_trajectory_length_minutes: 10
 
 
 weather:

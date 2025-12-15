@@ -25,6 +25,7 @@ class TrajectoryProcessor(DatasetProcessor):
         self.crop_to_circle = task_config["crop_to_circle"]
         self.drop_attributes = task_config.get("drop_attributes", [])
         self.process_config = task_config["process"]
+        self.create_training_data_config = task_config["create_training_data"]
 
     # ------------------------------------
     # Utility
@@ -268,3 +269,55 @@ class TrajectoryProcessor(DatasetProcessor):
     def _log_removal_reasons(self, reasons: list[str]):
         for reason in reasons:
             logger.info(f"            - {reason}")
+
+
+    # ------------------------------------
+    # Step 3: Create training data
+    # ------------------------------------
+
+    def create_training_data(self):
+        logger.info(f"📊 Creating training data for {self.icao}...")
+
+        all_trajectories_path = self._get_output_file_path_for("trajectories-processed")
+        if not os.path.exists(all_trajectories_path):
+            raise FileNotFoundError(f"Cached trajectories not found at {all_trajectories_path}. Please run the process and download methods first.")
+
+        traffic = Traffic(self._load_data(all_trajectories_path))
+        traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])
+        traffic = self._convert_to_metric_units(traffic)
+
+        logger.info(f"    - Sampling trajectories...")
+        self._log_sampling_info()
+        traffic = sample_trajectories(traffic, resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"], data_period_minutes=self.create_training_data_config["data_period_minutes"], min_trajectory_length_minutes=self.create_training_data_config["min_trajectory_length_minutes"])
+        logger.info(f"    - Segmenting input and horizon segments...")
+        input_segments, horizon_segments = get_input_horizon_segments(traffic, input_time_minutes=self.create_training_data_config["input_time_minutes"], horizon_time_minutes=self.create_training_data_config["horizon_time_minutes"], resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
+
+        output_file_path_inputs = self._get_output_file_path_for("trajectories-inputs")
+        output_file_path_horizons = self._get_output_file_path_for("trajectories-horizons")
+        logger.info(f"    - Saving input segments to {output_file_path_inputs}...")
+        input_segments.data.to_parquet(output_file_path_inputs)
+        logger.info(f"    - Saving horizon segments to {output_file_path_horizons}.")
+        horizon_segments.data.to_parquet(output_file_path_horizons)
+
+        logger.info(f"✅ Finished creating training data for {self.icao}.\n")
+
+    def _log_sampling_info(self):
+        input_time_minutes = self.create_training_data_config["input_time_minutes"]
+        horizon_time_minutes = self.create_training_data_config["horizon_time_minutes"]
+        resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
+        num_input_samples = input_time_minutes * 60 // resampling_rate_seconds
+        num_horizon_samples = horizon_time_minutes * 60 // resampling_rate_seconds
+        logger.info(f"        -> Input time: {input_time_minutes} minutes, Horizon: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
+        logger.info(f"        -> Number of input samples: {num_input_samples}, Number of horizon samples: {num_horizon_samples}")
+
+    def _convert_to_metric_units(self, traffic: Traffic) -> Traffic:
+        traffic.data["altitude"] = traffic.data["altitude"] * 0.3048                    # 1 ft = 0.3048 m
+        traffic.data["vertical_rate"] = traffic.data["vertical_rate"] * (0.3048 / 60)   # 1 ft/min = 0.3048 / 60 m/s
+        traffic.data["groundspeed"] = traffic.data["groundspeed"] * 1.852               # 1 kt = 1.852 km/h
+        return traffic
+
+    def _convert_to_aviation_units(self, traffic: Traffic) -> Traffic:
+        traffic.data["altitude"] = traffic.data["altitude"] / 0.3048                    # 1 m = 0.3048 ft
+        traffic.data["vertical_rate"] = traffic.data["vertical_rate"] / (0.3048 / 60)   # 1 ft/min = 0.3048 / 60 m/s
+        traffic.data["groundspeed"] = traffic.data["groundspeed"] / 1.852               # 1 km/h = 1.852 kt
+        return traffic
