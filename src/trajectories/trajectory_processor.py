@@ -118,7 +118,9 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Saving processed trajectories...")
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._save_data(traffic.data, processed_trajectories_path)
-        logger.info(f"✅ Finished processing trajectories for {self.icao}. Saved to {processed_trajectories_path}.\n")
+        removed_trajectories_path = self._get_temp_file_path_for("trajectories-processed-removed")
+        self._save_data(invalid_traffic.data, removed_trajectories_path)
+        logger.info(f"✅ Finished processing trajectories for {self.icao}. Saved\n    - Valid trajectories to {processed_trajectories_path}.\n    - Removed trajectories to {removed_trajectories_path}.\n")
 
     def _filter_traffic_by_airlines(self, traffic: Traffic) -> Traffic:
         filter_traffic_by_airlines_config = self.process_config.get("filter_traffic_by_airlines", {})
