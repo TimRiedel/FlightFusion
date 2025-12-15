@@ -136,6 +136,8 @@ class TrajectoryProcessor(DatasetProcessor):
         for flight in traffic:
             logger.info(f"        - Cleaning flight {flight.flight_id}...")
             processed_flight = remove_nan_values(flight, attribute="altitude")
+            processed_flight = remove_nan_values(processed_flight, attribute="latitude")
+            processed_flight = remove_nan_values(processed_flight, attribute="longitude")
             
             processed_flight = remove_duplicate_positions(processed_flight)
             
@@ -167,9 +169,15 @@ class TrajectoryProcessor(DatasetProcessor):
                 deviation_factor=lateral_config.get("deviation_factor", 10)
             )
             
-            processed_flight = remove_nan_values(processed_flight, attribute="altitude")
             processed_flight = recompute_track(processed_flight)
+            processed_flight = remove_nan_values(processed_flight, attribute="altitude")
+            processed_flight = remove_nan_values(processed_flight, attribute="distance")
+            processed_flight = remove_nan_values(processed_flight, attribute="track")
+            processed_flight = remove_nan_values(processed_flight, attribute="groundspeed")
             processed_flight_dfs.append(processed_flight.data)
+
+        traffic_df = pd.concat(processed_flight_dfs, ignore_index=True)
+        traffic_df = self._round_values(traffic_df)
         return Traffic(pd.concat(processed_flight_dfs, ignore_index=True))
 
     def _remove_invalid_flights(self, processed_traffic: Traffic, icao: str) -> tuple[Traffic, Traffic]:
@@ -239,12 +247,23 @@ class TrajectoryProcessor(DatasetProcessor):
         removed_traffic = Traffic(pd.concat(removed_traffic_dfs, ignore_index=True)) if removed_traffic_dfs else Traffic(pd.DataFrame())
         return processed_traffic, removed_traffic
     
-    def assign_speed_components(self, traffic: Traffic) -> Traffic:
+    def _assign_speed_components(self, traffic: Traffic) -> Traffic:
+        latitude, longitude = airports[self.icao].latlon
         flights = []
         for flight in traffic:
-            flight = assign_speed_components(flight)
+            flight = assign_speed_components(flight, longitude, latitude)
             flights.append(flight)
         return Traffic.from_flights(flights)
+
+    def _round_values(self, traffic_df: pd.DataFrame) -> pd.DataFrame:
+        traffic_df['latitude'] = traffic_df['latitude'].round(6)
+        traffic_df['longitude'] = traffic_df['longitude'].round(6)
+        traffic_df['altitude'] = traffic_df['altitude'].round(0).astype('int16')
+        traffic_df['groundspeed'] = traffic_df['groundspeed'].round(0).astype('int16')
+        traffic_df['vertical_rate'] = traffic_df['vertical_rate'].round(0).astype('int16')
+        traffic_df['track'] = traffic_df['track'].round(3)
+        traffic_df['distance'] = traffic_df['distance'].round(3)
+        return traffic_df
 
     def _log_removal_reasons(self, reasons: list[str]):
         for reason in reasons:

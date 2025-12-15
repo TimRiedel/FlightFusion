@@ -126,7 +126,7 @@ def assign_distance_to_target(traffic: Traffic, lat: float, lon: float) -> Traff
     traffic_df['distance'] = traffic_df.apply(
         lambda row: haversine_distance(row['latitude'], row['longitude'], lat, lon),
         axis=1
-    )
+    ).round(3)
     return Traffic(traffic_df)
 
 
