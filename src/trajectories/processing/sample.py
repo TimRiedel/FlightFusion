@@ -85,8 +85,8 @@ def get_input_horizon_segments(traffic: Traffic, input_time_minutes: int, horizo
     horizon_seconds = horizon_time_minutes * 60
     num_input_samples = input_time_seconds // resampling_rate_seconds
     num_horizon_samples = horizon_seconds // resampling_rate_seconds
-    print(f"Input time: {input_time_minutes} minutes, Horizon: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
-    print(f"    -> Number of input samples: {num_input_samples}, Number of horizon samples: {num_horizon_samples}")
+    # print(f"Input time: {input_time_minutes} minutes, Horizon: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
+    # print(f"    -> Number of input samples: {num_input_samples}, Number of horizon samples: {num_horizon_samples}")
 
     input_segments = []
     horizon_segments = []

@@ -49,7 +49,7 @@ class TrajectoryProcessor(DatasetProcessor):
         all_trajectories_path = self._get_temp_file_path_for(f"trajectories-raw")
         if os.path.exists(all_trajectories_path):
             logger.info(f"    ✓ Found existing trajectories file under {all_trajectories_path}, skipping download.")
-            logger.info(f"✅ Finished downloading CERRA reanalysis data for EDDB.\n")
+            logger.info(f"✅ Finished downloading trajectories for {self.icao}.\n")
             return
 
         all_traffic_dfs = []
@@ -62,7 +62,7 @@ class TrajectoryProcessor(DatasetProcessor):
             request_config = self._get_request_config(day_start_dt, day_end_dt)
             cache_path, exists_cached = self.cache.get_file_path(request_config)
             if exists_cached:
-                logger.info(f"        ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')}, skipping download.")
+                logger.info(f"        ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {cache_path}, skipping download.")
                 traffic = Traffic(self._load_data(cache_path))
                 all_traffic_dfs.append(traffic.data)
                 continue
@@ -78,10 +78,10 @@ class TrajectoryProcessor(DatasetProcessor):
             logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to cache {cache_path}.")
             all_traffic_dfs.append(traffic.data)
 
-        logger.info(f"    - Concatenating all trajectories into a single file...")
+        logger.info(f"    - Concatenating trajectories for all days into a single file...")
         all_traffic = Traffic(pd.concat(all_traffic_dfs, ignore_index=True))
         self._save_data(all_traffic.data, all_trajectories_path)
-        logger.info(f"        ✓ Saved all trajectories to {all_trajectories_path}.")
+        logger.info(f"        ✓ Saved trajectories for all days to {all_trajectories_path}.")
 
         logger.info(f"✅ Finished downloading trajectories for {self.icao}. Saved to {all_trajectories_path}.\n")
 
@@ -177,7 +177,7 @@ class TrajectoryProcessor(DatasetProcessor):
         # Remove flights with small duration
         small_duration_config = remove_config.get("remove_small_duration", {})
         if small_duration_config.get("enabled", True):
-            logger.info(f"    - Removing flights with small duration...")
+            logger.info(f"        - Removing flights with small duration...")
             processed_traffic, small_duration_flights, reasons = remove_flights_with_small_duration(
                 processed_traffic, 
                 threshold_seconds=small_duration_config.get("threshold_seconds", 60)
@@ -187,7 +187,7 @@ class TrajectoryProcessor(DatasetProcessor):
         # Remove non-continuous flights
         non_continuous_config = remove_config.get("remove_non_continuous", {})
         if non_continuous_config.get("enabled", True):
-            logger.info(f"    - Removing non-continuous flights...")
+            logger.info(f"        - Removing non-continuous flights...")
             processed_traffic, non_continuous_flights, reasons = remove_non_continous_flights(
                 processed_traffic, 
                 continuity_threshold_seconds=non_continuous_config.get("continuity_threshold_seconds", 120)
@@ -204,7 +204,7 @@ class TrajectoryProcessor(DatasetProcessor):
                 # Remove flights without runway alignment
                 runway_alignment_config = remove_config.get("remove_without_runway_alignment", {})
                 if runway_alignment_config.get("enabled", True):
-                    logger.info(f"    - Removing flights without runway alignment...")
+                    logger.info(f"        - Removing flights without runway alignment...")
                     arrival_traffic, no_runway_alignment_flights, reasons = remove_flights_without_runway_alignment(
                         arrival_traffic, 
                         icao, 
@@ -218,7 +218,7 @@ class TrajectoryProcessor(DatasetProcessor):
                 # Remove flights with go-around or holding
                 go_around_config = remove_config.get("remove_go_around", {})
                 if go_around_config.get("enabled", True):
-                    logger.info(f"    - Removing flights with go-around or holding...")
+                    logger.info(f"        - Removing flights with go-around or holding...")
                     arrival_traffic, go_around_holding_flights, reasons = remove_flights_with_go_around_holding(
                         arrival_traffic, 
                         icao, 
@@ -246,4 +246,4 @@ class TrajectoryProcessor(DatasetProcessor):
 
     def _log_removal_reasons(self, reasons: list[str]):
         for reason in reasons:
-            logger.info(f"        - {reason}")
+            logger.info(f"            - {reason}")

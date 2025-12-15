@@ -403,8 +403,8 @@ def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIt
 
         # Calculate the closest point to the threshold, which is still before the threshold
         closest_point_idx, closest_distance = _calculate_closest_point_to_threshold(flight_df, threshold)
-        if closest_distance > max_point_distance_from_threshold / 1000:
-            print(f"Warning: Closest point is {closest_distance:.2f} km from threshold {threshold.name}, which is greater than the maximum distance of {max_point_distance_from_threshold / 1000:.2f} km.")
+        # if closest_distance > max_point_distance_from_threshold / 1000:
+        #     print(f"Warning: Closest point is {closest_distance:.2f} km from threshold {threshold.name}, which is greater than the maximum distance of {max_point_distance_from_threshold / 1000:.2f} km.")
         
         # Clip the flight to the closest point and set the last point to the threshold
         flight_df = flight_df.loc[:closest_point_idx]
