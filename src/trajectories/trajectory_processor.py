@@ -311,13 +311,13 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"        -> Number of input samples: {num_input_samples}, Number of horizon samples: {num_horizon_samples}")
 
     def _convert_to_metric_units(self, traffic: Traffic) -> Traffic:
-        traffic.data["altitude"] = traffic.data["altitude"] * 0.3048                    # 1 ft = 0.3048 m
-        traffic.data["vertical_rate"] = traffic.data["vertical_rate"] * (0.3048 / 60)   # 1 ft/min = 0.3048 / 60 m/s
-        traffic.data["groundspeed"] = traffic.data["groundspeed"] * 1.852               # 1 kt = 1.852 km/h
+        traffic.data["altitude"] = (traffic.data["altitude"] * 0.3048).round(0).astype(int)                    # ft to m
+        traffic.data["vertical_rate"] = (traffic.data["vertical_rate"] * (0.3048 / 60)).round(2)               # ft/min to m/s
+        traffic.data["groundspeed"] = (traffic.data["groundspeed"] * 1.852 / 3.6).round(2)                     # kts to m/s
         return traffic
 
     def _convert_to_aviation_units(self, traffic: Traffic) -> Traffic:
-        traffic.data["altitude"] = traffic.data["altitude"] / 0.3048                    # 1 m = 0.3048 ft
-        traffic.data["vertical_rate"] = traffic.data["vertical_rate"] / (0.3048 / 60)   # 1 ft/min = 0.3048 / 60 m/s
-        traffic.data["groundspeed"] = traffic.data["groundspeed"] / 1.852               # 1 km/h = 1.852 kt
+        traffic.data["altitude"] = (traffic.data["altitude"] / 0.3048).round(0).astype(int)                    # m to ft
+        traffic.data["vertical_rate"] = (traffic.data["vertical_rate"] / (0.3048 / 60)).round(0).astype(int)   # m/s to ft/min
+        traffic.data["groundspeed"] = (traffic.data["groundspeed"] * 3.6 / 1.852).round(2)                     # m/s to kts
         return traffic

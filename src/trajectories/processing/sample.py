@@ -1,3 +1,4 @@
+import pandas as pd
 from traffic.core import Traffic, Flight
 
 from .compute_features import assign_flight_sample_id
@@ -33,6 +34,7 @@ def sample_trajectories(traffic: Traffic, resampling_rate_seconds: int, data_per
         flight_id with a sample index suffix (e.g., "flight_id_S1").
     """
     traffic = traffic.resample(f"{resampling_rate_seconds}s").eval()
+    traffic = traffic.drop(columns=["track_unwrapped"])
     sampled_flights = []
     for flight in traffic:
         flight_duration = flight.duration.components.minutes + 1
@@ -45,7 +47,7 @@ def sample_trajectories(traffic: Traffic, resampling_rate_seconds: int, data_per
 
             flight = flight.skip(minutes=data_period_minutes)
 
-    return Traffic.from_flights(sampled_flights)
+    return Traffic(pd.concat([flight.data for flight in sampled_flights], ignore_index=True))
 
 
 def get_input_horizon_segments(traffic: Traffic, input_time_minutes: int, horizon_time_minutes: int, resampling_rate_seconds: int) -> tuple[Traffic, Traffic]:
@@ -97,6 +99,6 @@ def get_input_horizon_segments(traffic: Traffic, input_time_minutes: int, horizo
         input_segments.append(input_segment)
         horizon_segments.append(horizon_segment)
 
-    input_segments = Traffic.from_flights(input_segments)
-    horizon_segments = Traffic.from_flights(horizon_segments)
-    return input_segments, horizon_segments
+    input_segments_traffic = Traffic(pd.concat([flight.data for flight in input_segments], ignore_index=True))
+    horizon_segments_traffic = Traffic(pd.concat([flight.data for flight in horizon_segments], ignore_index=True))
+    return input_segments_traffic, horizon_segments_traffic
