@@ -5,7 +5,7 @@ from typing import Union
 from shapely.geometry import Polygon
 from traffic.core import Flight, Traffic
 
-from .compute_features import assign_distances_to_next_waypoint
+from .compute_features import assign_distance_to_next_waypoint
 
 
 def crop_traffic_to_circle(traffic: Union[Traffic, Flight], circle_wgs84: Polygon) -> Union[Traffic, Flight]:
@@ -240,7 +240,7 @@ def remove_lateral_outliers(flight: Flight, window_size: int = 100, deviation_fa
         Flight object with lateral outliers removed. The trajectory is filtered to
         keep only points within the calculated deviation threshold.
     """
-    flight = assign_distances_to_next_waypoint(flight)
+    flight = assign_distance_to_next_waypoint(flight)
     flight_df = flight.data
     flight_df['distance_to_next'] = pd.to_numeric(flight_df['distance_to_next'], errors='coerce')
     flight_df = flight_df.dropna(subset=['distance_to_next'])
@@ -256,7 +256,7 @@ def remove_lateral_outliers(flight: Flight, window_size: int = 100, deviation_fa
     else:
         df_clean = flight_df.copy()
 
-    df_clean = df_clean.drop(columns=['rolling_mean', 'deviation', 'distance_to_next'])
+    df_clean = df_clean.drop(columns=['rolling_mean', 'deviation'])
 
     return Flight(df_clean)
 

@@ -96,11 +96,36 @@ def assign_flight_sample_id(flight: Flight, sample_index: int) -> Flight:
     return Flight(flight_df)
 
 
+def assign_time_since_start_of_trajectory(flight: Flight) -> Flight:
+    """
+    Assigns time elapsed since the start of the trajectory for each point.
+    
+    Calculates the time difference in seconds from the first timestamp in the
+    trajectory to each subsequent point.
+    
+    Parameters
+    -------
+    flight : Flight
+        Flight object containing trajectory data with a timestamp column.
+    
+    Returns
+    -------
+    Flight
+        Flight object with 'time_since_start_of_trajectory' column assigned,
+        containing the elapsed time in seconds from the trajectory start. The
+        trajectory is sorted by timestamp.
+    """
+    flight_df = flight.data
+    flight_df = flight_df.sort_values(by="timestamp")
+    flight_df["time_since_start_of_trajectory"] = (flight_df["timestamp"] - flight_df["timestamp"].iloc[0]).dt.total_seconds()
+    return Flight(flight_df)
+
+
 def assign_distance_to_target(traffic: Traffic, lat: float, lon: float) -> Traffic:
     """
     Assigns distance to a target location for each point in the trajectory.
     
-    Calculates the haversine distance from each point in the trajectory to the
+    Calculates the haversine distance (great circle distance) from each point in the trajectory to the
     specified target location (latitude, longitude).
     
     Credit: Ricardo Reinke
@@ -130,32 +155,7 @@ def assign_distance_to_target(traffic: Traffic, lat: float, lon: float) -> Traff
     return Traffic(traffic_df)
 
 
-def assign_time_since_start_of_trajectory(flight: Flight) -> Flight:
-    """
-    Assigns time elapsed since the start of the trajectory for each point.
-    
-    Calculates the time difference in seconds from the first timestamp in the
-    trajectory to each subsequent point.
-    
-    Parameters
-    -------
-    flight : Flight
-        Flight object containing trajectory data with a timestamp column.
-    
-    Returns
-    -------
-    Flight
-        Flight object with 'time_since_start_of_trajectory' column assigned,
-        containing the elapsed time in seconds from the trajectory start. The
-        trajectory is sorted by timestamp.
-    """
-    flight_df = flight.data
-    flight_df = flight_df.sort_values(by="timestamp")
-    flight_df["time_since_start_of_trajectory"] = (flight_df["timestamp"] - flight_df["timestamp"].iloc[0]).dt.total_seconds()
-    return Flight(flight_df)
-
-
-def assign_distances_to_next_waypoint(flight: Flight) -> Flight:
+def assign_distance_to_next_waypoint(flight: Flight) -> Flight:
     """
     Assigns distance to next waypoint for each point in the flight trajectory.
     
@@ -186,6 +186,45 @@ def assign_distances_to_next_waypoint(flight: Flight) -> Flight:
     distances.append(0)  # Last point has no next waypoint
     
     flight_df['distance_to_next'] = distances
+    return Flight(flight_df)
+
+
+def assign_remaining_track_miles(flight: Flight) -> Flight:
+    """
+    Assigns RTM (Remaining Trajectory Miles) for each waypoint in a given flight.
+    
+    RTM for a point is the sum of all future distance_to_next waypoint values.
+    This represents the total remaining distance along the trajectory path.
+    
+    Parameters
+    -------
+    flight : Flight
+        Flight object containing trajectory data with latitude and longitude columns.
+    
+    Returns
+    -------
+    Flight
+        Flight object with 'rtm' column assigned to each waypoint.
+    """
+    if "distance_to_next" not in flight.data.columns:
+        flight = assign_distance_to_next_waypoint(flight)
+        
+    flight_df = flight.data.copy()
+    flight_df = flight_df.sort_values(by='timestamp').reset_index(drop=True)
+    
+    # Ensure last point has distance_to_next = 0 (no next waypoint)
+    distance_to_next_values = flight_df['distance_to_next'].values.copy()
+    distance_to_next_values[-1] = 0.0
+    
+    # Calculate RTM: sum of all future distance_to_next values including current point
+    # For point at index i, RTM[i] = sum of distance_to_next[j] for j from i to end
+    # We calculate this by: cumulative sum from end (which includes current point)
+    reversed_distances = distance_to_next_values[::-1]
+    cumulative_sum_reversed = reversed_distances.cumsum()
+    rtm_values = cumulative_sum_reversed[::-1]
+    
+    flight_df['RTM'] = rtm_values
+    
     return Flight(flight_df)
 
 
