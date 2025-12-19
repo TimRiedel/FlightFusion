@@ -15,6 +15,7 @@ class ProcessingConfig:
     icao_code: str
     start_dt: datetime
     end_dt: datetime
+    days_of_month: list[int] | None
     circle_radius_km: int
     dataset_dir: str
     cache_dir: str
@@ -41,7 +42,10 @@ class DatasetProcessor:
         else:
             self.temp_dir = None
 
-        self.all_days = pd.date_range(start=self.start_dt, end=self.end_dt, freq="D")
+        days_of_month = processing_config.days_of_month
+        self.all_days = self._get_all_days(days_of_month)
+        print(self.all_days)
+
 
     # --------------------
     # I/O Functions
@@ -90,3 +94,14 @@ class DatasetProcessor:
         if not os.path.exists(path):
             raise FileNotFoundError(f"File not found at {path}")
         return pd.read_parquet(path)
+
+    # --------------------
+    # Helper Functions
+    # --------------------
+    def _get_all_days(self, days_of_month: list[int] = None) -> list[datetime]:
+        """Get list of all days in the date range. Keeps only the days specified in days_of_month."""
+        all_days = pd.date_range(start=self.start_dt, end=self.end_dt, freq="D").date.tolist()
+        if days_of_month is None: # do not do any filtering
+            return all_days
+        else:
+            return [day for day in all_days if day.day in days_of_month]

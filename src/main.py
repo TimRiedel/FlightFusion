@@ -33,6 +33,7 @@ def main():
             icao_code=icao,
             start_dt=start_dt,
             end_dt=end_dt,
+            days_of_month=cfg.get("days_of_month", None),
             circle_radius_km=cfg["radius_km"],
             dataset_dir=cfg["dataset_dir"],
             cache_dir=cfg["cache_dir"]
