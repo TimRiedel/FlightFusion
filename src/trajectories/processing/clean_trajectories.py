@@ -256,7 +256,7 @@ def remove_lateral_outliers(flight: Flight, window_size: int = 100, deviation_fa
     else:
         df_clean = flight_df.copy()
 
-    df_clean = df_clean.drop(columns=['rolling_mean', 'deviation'])
+    df_clean = df_clean.drop(columns=['rolling_mean', 'deviation', 'distance_to_next'])
 
     return Flight(df_clean)
 

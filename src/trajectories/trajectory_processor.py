@@ -113,9 +113,6 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Removing invalid flights...")
         traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
 
-        logger.info(f"    - Assigning speed components...")
-        traffic = self._compute_features(traffic)
-
         logger.info(f"    - Saving processed trajectories...")
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._save_data(traffic.data, processed_trajectories_path)
@@ -248,16 +245,6 @@ class TrajectoryProcessor(DatasetProcessor):
         removed_traffic = Traffic(pd.concat(removed_traffic_dfs, ignore_index=True)) if removed_traffic_dfs else Traffic(pd.DataFrame())
         return processed_traffic, removed_traffic
     
-    def _compute_features(self, traffic: Traffic) -> Traffic:
-        latitude, longitude = airports[self.icao].latlon
-        flights = []
-        for flight in traffic:
-            flight = assign_speed_components(flight, longitude, latitude)
-            flight = assign_remaining_track_miles(flight)
-            flight = flight.drop(columns=["distance_to_next"])
-            flights.append(flight)
-        return Traffic.from_flights(flights)
-
     def _round_values(self, traffic_df: pd.DataFrame) -> pd.DataFrame:
         traffic_df['latitude'] = traffic_df['latitude'].round(6)
         traffic_df['longitude'] = traffic_df['longitude'].round(6)
