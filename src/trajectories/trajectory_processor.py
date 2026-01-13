@@ -275,9 +275,21 @@ class TrajectoryProcessor(DatasetProcessor):
         traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])
         traffic = self._convert_to_metric_units(traffic)
 
+        logger.info(f"    - Computing local coordinates...")
+        ref_lat, ref_lon = airports[self.icao].latlon
+        traffic = assign_local_xy_coordinates(traffic, ref_lat=ref_lat, ref_lon=ref_lon)
+        
+        logger.info(f"    - Computing velocity components...")
+        traffic = assign_velocity_components(traffic, resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
+
         logger.info(f"    - Sampling trajectories...")
         self._log_sampling_info()
-        traffic = sample_trajectories(traffic, resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"], data_period_minutes=self.create_training_data_config["data_period_minutes"], min_trajectory_length_minutes=self.create_training_data_config["min_trajectory_length_minutes"])
+        traffic = sample_trajectories(
+            traffic,
+            resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"],
+            data_period_minutes=self.create_training_data_config["data_period_minutes"],
+            min_trajectory_length_minutes=self.create_training_data_config["min_trajectory_length_minutes"],
+        )
         logger.info(f"    - Segmenting input and horizon segments...")
         input_segments, horizon_segments = get_input_horizon_segments(traffic, input_time_minutes=self.create_training_data_config["input_time_minutes"], horizon_time_minutes=self.create_training_data_config["horizon_time_minutes"], resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
 

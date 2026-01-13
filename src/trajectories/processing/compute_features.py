@@ -5,6 +5,7 @@ import pyproj
 from traffic.core import Traffic, Flight
 
 from .great_circle_calculations import haversine_distance
+from .projections import get_projection_wgs84_to_aeqd
 
 
 def assign_flight_id(traffic: Traffic, split_by_gap: bool = True, gap_threshold_minutes: int = 60) -> Traffic:
@@ -350,3 +351,92 @@ def assign_speed_components(flight: Flight, ref_lon: float, ref_lat: float) -> F
     df["spdz"] = np.round(spdz, 1)
 
     return Flight(df)
+
+
+def assign_local_xy_coordinates(traffic: Traffic, ref_lat: float, ref_lon: float) -> Traffic:
+    """
+    Assigns local AEQD coordinates (x_coord, y_coord) to traffic trajectories.
+    
+    Computes local East/North coordinates in meters using an Azimuthal Equidistant
+    (AEQD) projection centered at (ref_lat, ref_lon). The coordinates are added as
+    new columns 'x_coord' (East) and 'y_coord' (North) without modifying existing
+    latitude/longitude columns.
+    
+    Parameters
+    ----------
+    traffic : Traffic
+        Traffic object containing trajectory data with 'latitude' and 'longitude'
+        columns in degrees (WGS84).
+    ref_lat : float
+        Reference latitude in degrees (WGS84) for the AEQD projection center.
+    ref_lon : float
+        Reference longitude in degrees (WGS84) for the AEQD projection center.
+    
+    Returns
+    -------
+    Traffic
+        Traffic object with added 'x_coord' and 'y_coord' columns in meters.
+        Original latitude and longitude columns remain unchanged.
+    """
+    df = traffic.data.copy()
+
+    transformer_wgs84_to_aeqd = get_projection_wgs84_to_aeqd(ref_lat, ref_lon)
+    x_m, y_m = transformer_wgs84_to_aeqd(df["longitude"].to_numpy(), df["latitude"].to_numpy())
+    df["x_coord"] = x_m.round(2)
+    df["y_coord"] = y_m.round(2)
+    
+    return Traffic(df)
+
+
+def assign_velocity_components(traffic: Traffic, resampling_rate_seconds: float) -> Traffic:
+    """
+    Assigns velocity components (speed_x, speed_y) and recomputes vertical_rate.
+    
+    Computes horizontal velocity components by decomposing groundspeed along the
+    local x/y axes using the track angle. Also recomputes vertical_rate from
+    altitude differences using finite differences divided by the resampling time
+    step. The vertical_rate column is overwritten.
+    
+    Parameters
+    ----------
+    traffic : Traffic
+        Traffic object containing trajectory data with 'groundspeed' (in m/s),
+        'track' (in degrees), 'altitude' (in meters), and 'flight_id' columns.
+    resampling_rate_seconds : float
+        Time step in seconds used for computing vertical velocity from altitude
+        differences. Should match the resampling rate of the trajectory data.
+    
+    Returns
+    -------
+    Traffic
+        Traffic object with added 'speed_x' and 'speed_y' columns (in m/s) and
+        updated 'vertical_rate' column (in m/s). Original groundspeed and track
+        columns remain unchanged.
+    """
+    df = traffic.data.copy()
+    df = df.sort_values(by="timestamp").reset_index(drop=True)
+
+    # 1) Horizontal velocity decomposition from groundspeed (m/s) and track (degrees)
+    track_rad = np.deg2rad(df["track"].to_numpy())
+    gs = df["groundspeed"].to_numpy()
+    df["speed_x"] = (gs * np.sin(track_rad)).round(2)
+    df["speed_y"] = (gs * np.cos(track_rad)).round(2)
+    
+    # 2) Vertical velocity from altitude differences (m/s)
+    alt_diff = (
+        df.groupby("flight_id", sort=False)["altitude"]
+        .diff()
+        .div(resampling_rate_seconds)
+    )
+
+    # Backfill within each flight to assign the first point the same rate
+    # as the second, and replace any remaining NaNs (single-point flights)
+    # with 0.0.
+    df["vertical_rate"] = (
+        alt_diff.groupby(df["flight_id"], sort=False)
+        .bfill()
+        .fillna(0.0)
+        .round(2)
+    )
+    
+    return Traffic(df)
