@@ -8,6 +8,19 @@ from utils.logger import logger
 from weather import MetarProcessor, WeatherProcessor
 
 
+def log_config(cfg):
+    logger.info("==================== Configuration ====================")
+    logger.info(f"Task: {cfg['task']}")
+    logger.info(f"Step: {cfg['step']}")
+    logger.info(f"Airports: {cfg['airports']}")
+    logger.info(f"Start: {cfg['start']}")
+    logger.info(f"End: {cfg['end']}")
+    if 'days_of_month' in cfg:
+        logger.info(f"Days of month: {cfg['days_of_month']}")
+    logger.info(f"Radius: {cfg['radius_km']}")
+    logger.info(f"Dataset dir: {cfg['dataset_dir']}")
+    logger.info(f"Cache dir: {cfg['cache_dir']}\n")
+
 def main():
     parser = argparse.ArgumentParser(description="FlightFusion data pipeline")
     parser.add_argument("--airports", help="One or more airport ICAO codes (e.g. EDDM,EDDL)")
@@ -27,6 +40,8 @@ def main():
     step = cfg["step"]
 
     logger.info(f"🚀 Starting FlightFusion pipeline for airports: {airports}, from {start_dt} to {end_dt}\n")
+    log_config(cfg)
+
 
     for icao in airports:
         processing_config = ProcessingConfig(

@@ -44,7 +44,6 @@ class DatasetProcessor:
 
         days_of_month = processing_config.days_of_month
         self.all_days = self._get_all_days(days_of_month)
-        print(self.all_days)
 
 
     # --------------------
