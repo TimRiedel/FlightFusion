@@ -88,11 +88,17 @@ class TrajectoryProcessor(DatasetProcessor):
 
 
     # ------------------------------------
-    # Step 2: Process trajectories
+    # Step 2: Clean trajectories
     # ------------------------------------
 
-    def process_trajectories(self):
-        logger.info(f"🧹 Processing trajectories for {self.icao}...")
+    def clean_trajectories(self):
+        logger.info(f"🧹 Cleaning trajectories for {self.icao}...")
+
+        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
+        if os.path.exists(cleaned_trajectories_path):
+            logger.info(f"    ✓ Found existing cleaned trajectories file under {cleaned_trajectories_path}, skipping cleaning. If you want to reclean the trajectories, delete the file and run the clean method again.")
+            logger.info(f"✅ Finished cleaning trajectories for {self.icao}.\n")
+            return
 
         all_trajectories_path = self._get_temp_file_path_for("trajectories-raw")
         if not os.path.exists(all_trajectories_path):
@@ -109,6 +115,32 @@ class TrajectoryProcessor(DatasetProcessor):
 
         logger.info(f"    - Cleaning trajectories (removing outliers, duplicates, NaN values)...")
         traffic = self._clean_trajectories(traffic)
+
+        logger.info(f"    - Saving cleaned trajectories...")
+        self._save_data(traffic.data, cleaned_trajectories_path)
+        logger.info(f"✅ Finished cleaning trajectories for {self.icao}. Saved to {cleaned_trajectories_path}.\n")
+
+    # ------------------------------------
+    # Step 3: Process trajectories
+    # ------------------------------------
+
+    def process_trajectories(self):
+        logger.info(f"🔍 Processing trajectories for {self.icao}...")
+
+        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
+        if os.path.exists(cleaned_trajectories_path):
+            logger.info(f"    ✓ Found existing processed trajectories file under {processed_trajectories_path}, skipping processing. If you want to reprocess the trajectories, delete the file and run the process method again.")
+            logger.info(f"✅ Finished processing trajectories for {self.icao}.\n")
+            return
+
+        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
+        if not os.path.exists(cleaned_trajectories_path):
+            raise FileNotFoundError(f"Cleaned trajectories not found at {cleaned_trajectories_path}. Please run the clean method first.")
+
+        traffic = Traffic(self._load_data(cleaned_trajectories_path))
+        if traffic.data.empty:
+            logger.warning(f"    ✗ Cleaned trajectories is empty.")
+            return
 
         logger.info(f"    - Removing invalid flights...")
         traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
@@ -261,7 +293,7 @@ class TrajectoryProcessor(DatasetProcessor):
 
 
     # ------------------------------------
-    # Step 3: Create training data
+    # Step 4: Create training data
     # ------------------------------------
 
     def create_training_data(self):

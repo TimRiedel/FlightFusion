@@ -3,7 +3,7 @@ import copy
 import yaml
 
 TASK_STEPS = {
-    "trajectories": ["download", "process", "create_training_data", "all"],
+    "trajectories": ["download", "clean", "process", "create_training_data", "all"],
     "metar": ["download", "parse", "process", "all"],
     "weather": ["download", "merge", "all"],
     "all": ["all"],

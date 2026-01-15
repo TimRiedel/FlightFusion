@@ -80,6 +80,8 @@ def main():
             trajectory_processor = TrajectoryProcessor(processing_config, cfg["trajectories"])
             if step in ["all", "download"]:
                 trajectory_processor.download_trajectories()
+            if step in ["all", "clean"]:
+                trajectory_processor.clean_trajectories()
             if step in ["all", "process"]:
                 trajectory_processor.process_trajectories()
             if step in ["all", "create_training_data"]:
