@@ -41,6 +41,12 @@ class TrajectoryProcessor(DatasetProcessor):
         }
         return request_config
 
+    def _load_traffic(self, path: str) -> Traffic:
+        traffic = Traffic(self._load_data(path))
+        if traffic.data.empty:
+            logger.warning(f"    ✗ Traffic data is empty at {path}.")
+        return traffic
+
     # ------------------------------------
     # Step 1: Download trajectories
     # ------------------------------------
@@ -95,16 +101,13 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"🧹 Cleaning trajectories for {self.icao}...")
 
         cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
-        if os.path.exists(cleaned_trajectories_path):
-            logger.info(f"    ✓ Found existing cleaned trajectories file under {cleaned_trajectories_path}, skipping cleaning. If you want to reclean the trajectories, delete the file and run the clean method again.")
-            logger.info(f"✅ Finished cleaning trajectories for {self.icao}.\n")
+        if self._check_current_step_file_exists(cleaned_trajectories_path, "cleaning"):
             return
 
         all_trajectories_path = self._get_temp_file_path_for("trajectories-raw")
-        if not os.path.exists(all_trajectories_path):
-            raise FileNotFoundError(f"Cached trajectories not found at {all_trajectories_path}. Please run the download method first.")
+        self._ensure_previous_step_file_exists(all_trajectories_path, "download")
 
-        traffic = Traffic(self._load_data(all_trajectories_path))
+        traffic = self._load_traffic(all_trajectories_path)
         traffic = filter_traffic_by_type(traffic, self.traffic_type)
         if traffic.data.empty:
             logger.warning(f"    ✗ Trajectories is empty for traffic type {self.traffic_type}.")
@@ -119,39 +122,7 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Saving cleaned trajectories...")
         self._save_data(traffic.data, cleaned_trajectories_path)
         logger.info(f"✅ Finished cleaning trajectories for {self.icao}. Saved to {cleaned_trajectories_path}.\n")
-
-    # ------------------------------------
-    # Step 3: Process trajectories
-    # ------------------------------------
-
-    def process_trajectories(self):
-        logger.info(f"🔍 Processing trajectories for {self.icao}...")
-
-        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
-        if os.path.exists(cleaned_trajectories_path):
-            logger.info(f"    ✓ Found existing processed trajectories file under {processed_trajectories_path}, skipping processing. If you want to reprocess the trajectories, delete the file and run the process method again.")
-            logger.info(f"✅ Finished processing trajectories for {self.icao}.\n")
-            return
-
-        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
-        if not os.path.exists(cleaned_trajectories_path):
-            raise FileNotFoundError(f"Cleaned trajectories not found at {cleaned_trajectories_path}. Please run the clean method first.")
-
-        traffic = Traffic(self._load_data(cleaned_trajectories_path))
-        if traffic.data.empty:
-            logger.warning(f"    ✗ Cleaned trajectories is empty.")
-            return
-
-        logger.info(f"    - Removing invalid flights...")
-        traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
-
-        logger.info(f"    - Saving processed trajectories...")
-        processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
-        self._save_data(traffic.data, processed_trajectories_path)
-        removed_trajectories_path = self._get_temp_file_path_for("trajectories-processed-removed")
-        self._save_data(invalid_traffic.data, removed_trajectories_path)
-        logger.info(f"✅ Finished processing trajectories for {self.icao}. Saved\n    - Valid trajectories to {processed_trajectories_path}.\n    - Removed trajectories to {removed_trajectories_path}.\n")
-
+    
     def _filter_traffic_by_airlines(self, traffic: Traffic) -> Traffic:
         filter_traffic_by_airlines_config = self.process_config.get("filter_traffic_by_airlines", {})
         if filter_traffic_by_airlines_config.get("enabled", True):
@@ -209,6 +180,31 @@ class TrajectoryProcessor(DatasetProcessor):
         traffic_df = pd.concat(processed_flight_dfs, ignore_index=True)
         traffic_df = self._round_values(traffic_df)
         return Traffic(pd.concat(processed_flight_dfs, ignore_index=True))
+
+    # ------------------------------------
+    # Step 3: Process trajectories
+    # ------------------------------------
+
+    def process_trajectories(self):
+        logger.info(f"🔍 Processing trajectories for {self.icao}...")
+
+        processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
+        if self._check_current_step_file_exists(processed_trajectories_path, "processing"):
+            return
+
+        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
+        self._ensure_previous_step_file_exists(cleaned_trajectories_path, "clean")
+
+        traffic = self._load_traffic(cleaned_trajectories_path)
+        logger.info(f"    - Removing invalid flights...")
+        traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
+
+        logger.info(f"    - Saving processed and removed trajectories...")
+        self._save_data(traffic.data, processed_trajectories_path)
+        removed_trajectories_path = self._get_temp_file_path_for("trajectories-processed-removed-flights")
+        self._save_data(invalid_traffic.data, removed_trajectories_path)
+        logger.info(f"✅ Finished processing trajectories for {self.icao}. Saved\n    - Valid trajectories to {processed_trajectories_path}.\n    - Removed trajectories to {removed_trajectories_path}.\n")
+
 
     def _remove_invalid_flights(self, processed_traffic: Traffic, icao: str) -> tuple[Traffic, Traffic]:
         remove_config = self.process_config.get("remove_flights", {})
@@ -299,11 +295,18 @@ class TrajectoryProcessor(DatasetProcessor):
     def create_training_data(self):
         logger.info(f"📊 Creating training data for {self.icao}...")
 
-        all_trajectories_path = self._get_output_file_path_for("trajectories-processed")
-        if not os.path.exists(all_trajectories_path):
-            raise FileNotFoundError(f"Cached trajectories not found at {all_trajectories_path}. Please run the process and download methods first.")
+        inputs_path = self._get_output_file_path_for("trajectories-inputs")
+        horizons_path = self._get_output_file_path_for("trajectories-horizons")
+        if os.path.exists(inputs_path) and os.path.exists(horizons_path):
+            logger.info(f"    ✓ Found existing input and horizon segments under {inputs_path} and {horizons_path}, skipping creation. To rerun this step, delete the files and run the method again.")
+            return
 
-        traffic = Traffic(self._load_data(all_trajectories_path))
+        processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
+        self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
+
+        traffic = self._load_traffic(processed_trajectories_path)
+
+        logger.info(f"    - Converting to metric units...")
         traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])
         traffic = self._convert_to_metric_units(traffic)
 
@@ -322,15 +325,14 @@ class TrajectoryProcessor(DatasetProcessor):
             data_period_minutes=self.create_training_data_config["data_period_minutes"],
             min_trajectory_length_minutes=self.create_training_data_config["min_trajectory_length_minutes"],
         )
+
         logger.info(f"    - Segmenting input and horizon segments...")
         input_segments, horizon_segments = get_input_horizon_segments(traffic, input_time_minutes=self.create_training_data_config["input_time_minutes"], horizon_time_minutes=self.create_training_data_config["horizon_time_minutes"], resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
 
-        output_file_path_inputs = self._get_output_file_path_for("trajectories-inputs")
-        output_file_path_horizons = self._get_output_file_path_for("trajectories-horizons")
-        logger.info(f"    - Saving input segments to {output_file_path_inputs}...")
-        input_segments.data.to_parquet(output_file_path_inputs)
-        logger.info(f"    - Saving horizon segments to {output_file_path_horizons}.")
-        horizon_segments.data.to_parquet(output_file_path_horizons)
+        logger.info(f"    - Saving input segments to {inputs_path}...")
+        input_segments.data.to_parquet(inputs_path)
+        logger.info(f"    - Saving horizon segments to {horizons_path}.")
+        horizon_segments.data.to_parquet(horizons_path)
 
         logger.info(f"✅ Finished creating training data for {self.icao}.\n")
 

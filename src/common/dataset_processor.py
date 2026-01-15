@@ -62,6 +62,19 @@ class DatasetProcessor:
         """Get path for final output files (stored directly in airport directory)"""
         return os.path.join(self.output_dir, f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.{extension}")
 
+    def _check_current_step_file_exists(self, path: str, step_name: str) -> bool:
+        """Check if the current step's output file already exists."""
+        if os.path.exists(path):
+            logger.info(f"    ✓ Found existing output file at {path}, skipping step '{step_name}'. To rerun this step, delete the file and run the method again.")
+            logger.info(f"✅ Finished step '{step_name}' for {self.icao}.\n")
+            return True
+        return False
+
+    def _ensure_previous_step_file_exists(self, path: str, previous_step_name: str):
+        """Check if the previous step's output file exists."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Output file from '{previous_step_name}' step not found at {path}. Please run the previous step '{previous_step_name}' first.")
+
     def _save_data(self, df: pd.DataFrame, path: str, sortby: str = None):
         """Save DataFrame to parquet file."""
         if sortby:
@@ -104,3 +117,4 @@ class DatasetProcessor:
             return all_days
         else:
             return [day for day in all_days if day.day in days_of_month]
+
