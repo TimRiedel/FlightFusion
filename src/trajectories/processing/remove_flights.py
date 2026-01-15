@@ -225,8 +225,16 @@ def has_go_around_climb_segment(flight: Flight, icao: str) -> bool:
     -------
     bool
         True if the flight has a go-around climb segment, False otherwise.
+        Returns False if an error occurs during detection (e.g., empty iterator raising StopIteration).
     """
-    return flight.has(lambda f: f.go_around(icao))
+    try:
+        return flight.has(lambda f: f.go_around(icao))
+    except RuntimeError as e:
+        # Handle RuntimeError that occurs when the go_around generator raises StopIteration
+        # (in Python 3.7+, StopIteration raised from a generator is converted to RuntimeError)
+        # If we can't determine if there's a go-around, assume there isn't one
+        print(f"Error detecting go-around for flight {flight.flight_id} at {icao}: {e}. Assuming no go-around.")
+        return False
 
 
 def has_track_change_for_go_around(flight: Flight, track_threshold: int = 300) -> bool:
