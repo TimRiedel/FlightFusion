@@ -105,6 +105,10 @@ class MetarProcessor(DatasetProcessor):
     # --------------------
 
     def parse(self):
+        parsed_path = self._get_temp_file_path_for("parsed-metar")
+        if self._check_current_step_file_exists(parsed_path, "parsing"):
+            return
+
         request_config = self._get_request_config()
         file_path, exists_cached = self.cache.get_file_path(request_config)
         if not exists_cached:
@@ -124,9 +128,8 @@ class MetarProcessor(DatasetProcessor):
                 continue
 
         parsed_reports_df = pd.DataFrame(parsed_reports_map.values())
-        path = self._get_temp_file_path_for("parsed-metar")
-        self._save_data(parsed_reports_df, path)
-        logger.info(f"✅ Parsed {len(parsed_reports_df)} METAR reports, saved to {path}\n")
+        self._save_data(parsed_reports_df, parsed_path)
+        logger.info(f"✅ Parsed {len(parsed_reports_df)} METAR reports, saved to {parsed_path}\n")
 
     def _parse_report_message(self, message: str, date: datetime):
         if message.startswith("COR"):
@@ -230,7 +233,14 @@ class MetarProcessor(DatasetProcessor):
     # --------------------
 
     def process(self):
-        parsed_reports_df = self._load_data(self._get_temp_file_path_for("parsed-metar"))
+        processed_path = self._get_output_file_path_for("metar")
+        if self._check_current_step_file_exists(processed_path, "process"):
+            return
+
+        parsed_path = self._get_temp_file_path_for("parsed-metar")
+        self._ensure_previous_step_file_exists(parsed_path, "parse")
+
+        parsed_reports_df = self._load_data(parsed_path)
         logger.info(f"📈 Processing {len(parsed_reports_df)} METAR reports for machine learning...")
 
         processed_reports = parsed_reports_df.copy()
@@ -240,9 +250,8 @@ class MetarProcessor(DatasetProcessor):
         processed_reports = self._convert_booleans_to_int(processed_reports)
         processed_reports = self._round_numeric_columns(processed_reports)
 
-        path = self._get_output_file_path_for("metar")
-        self._save_data(processed_reports, path)
-        logger.info(f"✅ Processed {len(processed_reports)} METAR reports, saved to {path}\n")
+        self._save_data(processed_reports, processed_path)
+        logger.info(f"✅ Processed {len(processed_reports)} METAR reports, saved to {processed_path}\n")
 
     def _add_cyclic_encodings(self, processed_reports: pd.DataFrame):
         # Set wind dir to 0, if wind_dir is 360, because wind is always reported as 360 for direct northerly wind and never as 000

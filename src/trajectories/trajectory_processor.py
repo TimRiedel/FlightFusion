@@ -1,167 +1,358 @@
-import contextlib
-import io
-import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
+import warnings
 
 import pandas as pd
 from common.dataset_processor import DatasetProcessor, ProcessingConfig
-from traffic.core.flight import Flight
-from traffic.data import opensky
+from traffic.core import Traffic, Flight
+from traffic.data import airports
+
+from common.dataset_processor import DatasetProcessor
+from trajectories.processing import *
 from utils.logger import logger
+from utils.cache import Cache
+
+# Suppress the RuntimeWarning about numexpr engine fallback
+warnings.filterwarnings('ignore', message='.*numexpr does not support extension array dtypes.*', category=RuntimeWarning)
 
 
 class TrajectoryProcessor(DatasetProcessor):
     def __init__(self, processing_config: ProcessingConfig, task_config: dict):
-        super().__init__(processing_config, task_type="flights", task_config=task_config, create_temp_dir=True)
+        super().__init__(processing_config, task_type="trajectories", task_config=task_config, create_temp_dir=True)
+        self.cache = Cache(processing_config.cache_dir, "trajectories", self.icao)
 
-        self.check_runway_alignment = task_config.get("check_runway_alignment", True)
-        self.excluded_callsigns = task_config.get("excluded_callsigns", [])
-
-    # ------------------------------------
-    # Download Step 1: Flight List
-    # ------------------------------------
-
-    def download_flightlist(self):
-        logger.info(f"📥 Downloading flight lists for {self.icao}...")
-
-        flightlist_df = self._get_flightlist()
-
-        logger.info(f"    → Processing flight list from {self.start_dt} to {self.end_dt}") 
-        flightlist_df = self._remove_invalid(flightlist_df)
-        flightlist_df = self._remove_departures(flightlist_df)
-        flightlist_df = self._remove_same_departure_arrival(flightlist_df)
-
-        path = self._get_temp_file_path_for("flightlist")
-        self._save_data(flightlist_df, path, sortby="lastseen")
-        logger.info(f"✅ Processed {len(flightlist_df)} flights, saved flightlist to {path}\n")
-
-    def _get_flightlist(self) -> pd.DataFrame:
-        flightlist_path = self._get_temp_file_path_for("flightlist")
-
-        if os.path.exists(flightlist_path):
-            logger.info(f"    ✓ Found existing raw flightlist data, skipping download.")
-            flightlist_df = pd.read_parquet(flightlist_path)
-            return flightlist_df
-        else:
-            logger.info(f"    → Fetching flight list from {self.start_dt} to {self.end_dt}") 
-            flightlist_df = self._fetch_flight_list(self.icao, self.start_dt, self.end_dt)
-            flightlist_df["flight_id"] = flightlist_df["callsign"].fillna("").str.strip() + "_" + flightlist_df["lastseen"].dt.strftime("%Y%m%d%H%M%S")
-
-            self._save_data(flightlist_df, flightlist_path, sortby="lastseen")
-            logger.info(f"        ✓ {len(flightlist_df)} flights saved to {flightlist_path}")
-            return flightlist_df
-
-    def _fetch_flight_list(self, icao: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
-        show_output = logger.isEnabledFor(logging.DEBUG)
-
-        if show_output:
-            return opensky.flightlist(
-                airport=icao,
-                start=start_dt.strftime("%Y-%m-%d 00:00:00"),
-                stop=end_dt.strftime("%Y-%m-%d 23:59:59")
-            )
-        else:
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                return opensky.flightlist(
-                    airport=icao,
-                    start=start_dt.strftime("%Y-%m-%d 00:00:00"),
-                    stop=end_dt.strftime("%Y-%m-%d 23:59:59")
-                )
-
-    def _remove_invalid(self, df: pd.DataFrame):
-        return df.dropna().drop_duplicates()
-
-    def _remove_departures(self, df: pd.DataFrame):
-        return df[df["arrival"] == self.icao]
-
-    def _remove_same_departure_arrival(self, df: pd.DataFrame):
-        return df[df["departure"] != df["arrival"]]
-
-    def _remove_by_callsign(self, df: pd.DataFrame):
-        removal_condition = (
-            ~df["callsign"].str.match(r"^[A-Za-z]{3}.*\d") | # this query does not seem to work, as N81 is also detected as valid
-            df["callsign"].str[:3].isin(self.excluded_callsigns)
-        )
-        return df[~removal_condition]
-
+        self.traffic_type = task_config["traffic_type"]
+        self.crop_to_circle = task_config["crop_to_circle"]
+        self.drop_attributes = task_config.get("drop_attributes", [])
+        self.process_config = task_config["process"]
+        self.create_training_data_config = task_config["create_training_data"]
 
     # ------------------------------------
-    # Download Step 2: Trajectories
+    # Utility
+    # ------------------------------------
+    
+    def _get_request_config(self, day_start_dt: datetime, day_end_dt: datetime):
+        request_config = {
+            "icao": self.icao,
+            "start_dt": day_start_dt,
+            "end_dt": day_end_dt,
+            "radius_m": self.radius_m,
+            "traffic_type": self.traffic_type
+        }
+        return request_config
+
+    def _load_traffic(self, path: str) -> Traffic:
+        traffic = Traffic(self._load_data(path))
+        if traffic.data.empty:
+            logger.warning(f"    ✗ Traffic data is empty at {path}.")
+        return traffic
+
+    # ------------------------------------
+    # Step 1: Download trajectories
     # ------------------------------------
 
     def download_trajectories(self):
         logger.info(f"📡 Downloading trajectories for {self.icao}...")
+        all_trajectories_path = self._get_temp_file_path_for(f"trajectories-raw")
+        if os.path.exists(all_trajectories_path):
+            logger.info(f"    ✓ Found existing trajectories file under {all_trajectories_path}, skipping download.")
+            logger.info(f"✅ Finished downloading trajectories for {self.icao}.\n")
+            return
 
-        flightlist_df = self._load_flightlist_data()
-        daily_paths = []
+        all_traffic_dfs = []
+        for day in self.all_days:
+            day_start_dt = day.strftime("%Y-%m-%d 00:00:00")
+            day_end_dt = day.strftime("%Y-%m-%d 23:59:59")
+            lat, lon = airports[self.icao].latlon
 
-        for day, group in flightlist_df.groupby("_date"):
-            logger.info(f"    → Processing {len(group)} flights for {day}")
-            day_trajs = []
+            logger.info(f"    - Downloading trajectories for day {day.strftime('%Y-%m-%d')}.")
+            request_config = self._get_request_config(day_start_dt, day_end_dt)
+            cache_path, exists_cached = self.cache.get_file_path(request_config)
+            if exists_cached:
+                logger.info(f"        ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {cache_path}, skipping download.")
+                traffic = Traffic(self._load_data(cache_path))
+                all_traffic_dfs.append(traffic.data)
+                continue
 
-            for _, row in group.iterrows():
-                flight = self._fetch_flight_trajectory(row["callsign"], row["firstseen"], row["lastseen"])
-                if not flight or flight.data is None or flight.data.empty:
-                    logger.warning(f"        ⚠️ No trajectory data for flight {row['callsign']} from {row['firstseen']} to {row['lastseen']}. Skipping.")
-                    continue
-                logger.info(f"        ✓ Fetched trajectory for flight {flight.callsign}.")
+            traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
+            traffic = drop_irrelevant_attributes(traffic, self.drop_attributes)
+            traffic = assign_flight_id(traffic)
+            traffic = assign_distance_to_target(traffic, lat, lon)
+            if self.crop_to_circle:
+                traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
-                if self.check_runway_alignment: # TODO: this does not work for departures
-                    rwy = self._check_runway_alignment(flight, row["firstseen"], row["lastseen"])
-                    if rwy is None:
-                        logger.warning(f"        ⚠️ No runway alignment found for flight {flight.callsign} on {row["lastseen"].date()}. Skipping.")
-                    flight.data["rwy"] = rwy
+            self._save_data(traffic.data, cache_path)
+            logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to cache {cache_path}.")
+            all_traffic_dfs.append(traffic.data)
 
-                day_trajs.append(flight.data)
+        logger.info(f"    - Concatenating trajectories for all days into a single file...")
+        all_traffic = Traffic(pd.concat(all_traffic_dfs, ignore_index=True))
+        self._save_data(all_traffic.data, all_trajectories_path)
+        logger.info(f"        ✓ Saved trajectories for all days to {all_trajectories_path}.")
 
-            day_merged = pd.concat(day_trajs, ignore_index=True)
-            day_path = self._get_temp_file_path_for("trajectories", pd.to_datetime(day))
-            self._save_data(day_merged, day_path, sortby="timestamp")
-            logger.info(f"        ✓ Saved {len(day_merged)} trajectory points for {day} to {day_path}")
-            daily_paths.append(day_path)
+        logger.info(f"✅ Finished downloading trajectories for {self.icao}. Saved to {all_trajectories_path}.\n")
 
-        merged = self._merge_files(daily_paths, sortby="timestamp")
-        out_path = self._get_output_file_path_for("trajectories")
-        self._save_data(merged, out_path)
-        logger.info(f"✅ Saved merged trajectories to {out_path}")
 
-    def _load_flightlist_data(self):
-        flightlist_path = self._get_temp_file_path_for("flightlist")
-        flightlist_df = self._load_data(flightlist_path)
-        flightlist_df["_date"] = pd.to_datetime(flightlist_df["lastseen"]).dt.date
-        return flightlist_df
+    # ------------------------------------
+    # Step 2: Clean trajectories
+    # ------------------------------------
 
-    def _fetch_flight_trajectory(self, callsign, firstseen, lastseen):
-        flight = opensky.history(
-            start=firstseen,
-            stop=lastseen,
-            callsign=callsign,
-            return_flight=True
+    def clean_trajectories(self):
+        logger.info(f"🧹 Cleaning trajectories for {self.icao}...")
+
+        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
+        if self._check_current_step_file_exists(cleaned_trajectories_path, "cleaning"):
+            return
+
+        all_trajectories_path = self._get_temp_file_path_for("trajectories-raw")
+        self._ensure_previous_step_file_exists(all_trajectories_path, "download")
+
+        traffic = self._load_traffic(all_trajectories_path)
+        traffic = filter_traffic_by_type(traffic, self.traffic_type)
+        if traffic.data.empty:
+            logger.warning(f"    ✗ Trajectories is empty for traffic type {self.traffic_type}.")
+            return
+
+        logger.info(f"    - Filtering trajectories by airlines...")
+        traffic = self._filter_traffic_by_airlines(traffic)
+
+        logger.info(f"    - Cleaning trajectories (removing outliers, duplicates, NaN values)...")
+        traffic = self._clean_trajectories(traffic)
+
+        logger.info(f"    - Saving cleaned trajectories...")
+        self._save_data(traffic.data, cleaned_trajectories_path)
+        logger.info(f"✅ Finished cleaning trajectories for {self.icao}. Saved to {cleaned_trajectories_path}.\n")
+    
+    def _filter_traffic_by_airlines(self, traffic: Traffic) -> Traffic:
+        filter_traffic_by_airlines_config = self.process_config.get("filter_traffic_by_airlines", {})
+        if filter_traffic_by_airlines_config.get("enabled", True):
+            excluded_callsigns = filter_traffic_by_airlines_config.get("excluded_callsigns", [])
+            top_n_airlines = filter_traffic_by_airlines_config.get("top_n_airlines", None)
+            traffic = filter_traffic_by_most_common_airlines(traffic, excluded_callsigns=excluded_callsigns, top_n_airlines=top_n_airlines)
+        return traffic
+
+    def _clean_trajectories(self, traffic: Traffic) -> Traffic:
+        clean_config = self.task_config.get("clean", {})
+        processed_flight_dfs = []
+        for flight in traffic:
+            logger.info(f"        - Cleaning flight {flight.flight_id}...")
+            processed_flight = remove_nan_values(flight, attribute="altitude")
+            processed_flight = remove_nan_values(processed_flight, attribute="latitude")
+            processed_flight = remove_nan_values(processed_flight, attribute="longitude")
+            
+            processed_flight = remove_duplicate_positions(processed_flight)
+            
+            # Remove altitude outliers
+            alt_outlier_config = clean_config.get("remove_outliers_altitude", {})
+            processed_flight = remove_outliers(
+                processed_flight, 
+                "altitude", 
+                alt_outlier_config.get("threshold", 300),
+                window_size=alt_outlier_config.get("window_size", 20),
+                handle_outliers=alt_outlier_config.get("handle_outliers", "drop")
+            )
+            
+            # Remove groundspeed outliers
+            gs_outlier_config = clean_config.get("remove_outliers_groundspeed", {})
+            processed_flight = remove_outliers(
+                processed_flight, 
+                "groundspeed", 
+                gs_outlier_config.get("threshold", 20),
+                window_size=gs_outlier_config.get("window_size", 10),
+                handle_outliers=gs_outlier_config.get("handle_outliers", "drop")
+            )
+            
+            # Remove lateral outliers
+            lateral_config = clean_config.get("remove_lateral_outliers", {})
+            processed_flight = remove_lateral_outliers(
+                processed_flight,
+                window_size=lateral_config.get("window_size", 100),
+                deviation_factor=lateral_config.get("deviation_factor", 10)
+            )
+            
+            processed_flight = recompute_track(processed_flight)
+            processed_flight = remove_nan_values(processed_flight, attribute="altitude")
+            processed_flight = remove_nan_values(processed_flight, attribute="distance")
+            processed_flight = remove_nan_values(processed_flight, attribute="track")
+            processed_flight = remove_nan_values(processed_flight, attribute="groundspeed")
+            processed_flight_dfs.append(processed_flight.data)
+
+        traffic_df = pd.concat(processed_flight_dfs, ignore_index=True)
+        traffic_df = self._round_values(traffic_df)
+        return Traffic(pd.concat(processed_flight_dfs, ignore_index=True))
+
+    # ------------------------------------
+    # Step 3: Process trajectories
+    # ------------------------------------
+
+    def process_trajectories(self):
+        logger.info(f"🔍 Processing trajectories for {self.icao}...")
+
+        processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
+        if self._check_current_step_file_exists(processed_trajectories_path, "processing"):
+            return
+
+        cleaned_trajectories_path = self._get_temp_file_path_for("trajectories-cleaned")
+        self._ensure_previous_step_file_exists(cleaned_trajectories_path, "clean")
+
+        traffic = self._load_traffic(cleaned_trajectories_path)
+        logger.info(f"    - Removing invalid flights...")
+        traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
+
+        logger.info(f"    - Saving processed and removed trajectories...")
+        self._save_data(traffic.data, processed_trajectories_path)
+        removed_trajectories_path = self._get_temp_file_path_for("trajectories-processed-removed-flights")
+        self._save_data(invalid_traffic.data, removed_trajectories_path)
+        logger.info(f"✅ Finished processing trajectories for {self.icao}. Saved\n    - Valid trajectories to {processed_trajectories_path}.\n    - Removed trajectories to {removed_trajectories_path}.\n")
+
+
+    def _remove_invalid_flights(self, processed_traffic: Traffic, icao: str) -> tuple[Traffic, Traffic]:
+        remove_config = self.process_config.get("remove_flights", {})
+        removed_traffic_dfs = []
+        
+        # Remove flights with small duration
+        small_duration_config = remove_config.get("remove_small_duration", {})
+        if small_duration_config.get("enabled", True):
+            logger.info(f"        - Removing flights with small duration...")
+            processed_traffic, small_duration_flights, reasons = remove_flights_with_small_duration(
+                processed_traffic, 
+                threshold_seconds=small_duration_config.get("threshold_seconds", 60)
+            )
+            removed_traffic_dfs.append(small_duration_flights.data)
+            self._log_removal_reasons(reasons)
+        # Remove non-continuous flights
+        non_continuous_config = remove_config.get("remove_non_continuous", {})
+        if non_continuous_config.get("enabled", True):
+            logger.info(f"        - Removing non-continuous flights...")
+            processed_traffic, non_continuous_flights, reasons = remove_non_continous_flights(
+                processed_traffic, 
+                continuity_threshold_seconds=non_continuous_config.get("continuity_threshold_seconds", 120)
+            )
+            removed_traffic_dfs.append(non_continuous_flights.data)
+            self._log_removal_reasons(reasons)
+        
+        # Apply arrival-specific removals if needed
+        if self.traffic_type in ["arrivals", "all"]:
+            arrival_traffic = filter_traffic_by_type(processed_traffic, "arrivals")
+            departure_traffic = filter_traffic_by_type(processed_traffic, "departures") if self.traffic_type == "all" else None
+            
+            if not arrival_traffic.data.empty:
+                # Remove flights without runway alignment
+                runway_alignment_config = remove_config.get("remove_without_runway_alignment", {})
+                if runway_alignment_config.get("enabled", True):
+                    logger.info(f"        - Removing flights without runway alignment...")
+                    arrival_traffic, no_runway_alignment_flights, reasons = remove_flights_without_runway_alignment(
+                        arrival_traffic, 
+                        icao, 
+                        final_approach_time_seconds=runway_alignment_config.get("final_approach_time_seconds", 180),
+                        angle_tolerance=runway_alignment_config.get("angle_tolerance", 0.1),
+                        min_duration_seconds=runway_alignment_config.get("min_duration_seconds", 40)
+                    )
+                    removed_traffic_dfs.append(no_runway_alignment_flights.data)
+                    self._log_removal_reasons(reasons)
+                
+                # Remove flights with go-around or holding
+                go_around_config = remove_config.get("remove_go_around", {})
+                if go_around_config.get("enabled", True):
+                    logger.info(f"        - Removing flights with go-around or holding...")
+                    arrival_traffic, go_around_holding_flights, reasons = remove_flights_with_go_around_holding(
+                        arrival_traffic, 
+                        icao, 
+                        track_threshold=go_around_config.get("track_threshold", 330),
+                        time_window_seconds=go_around_config.get("time_window_seconds", 500)
+                    )
+                    removed_traffic_dfs.append(go_around_holding_flights.data)
+                    self._log_removal_reasons(reasons)
+
+            # Merge back with departures if needed
+            if self.traffic_type == "all" and departure_traffic is not None:
+                processed_traffic = merge_traffic(arrival_traffic, departure_traffic)
+            else:
+                processed_traffic = arrival_traffic
+        
+        removed_traffic = Traffic(pd.concat(removed_traffic_dfs, ignore_index=True)) if removed_traffic_dfs else Traffic(pd.DataFrame())
+        return processed_traffic, removed_traffic
+    
+    def _round_values(self, traffic_df: pd.DataFrame) -> pd.DataFrame:
+        traffic_df['latitude'] = traffic_df['latitude'].round(6)
+        traffic_df['longitude'] = traffic_df['longitude'].round(6)
+        traffic_df['altitude'] = traffic_df['altitude'].round(0).astype('int16')
+        traffic_df['groundspeed'] = traffic_df['groundspeed'].round(0).astype('int16')
+        traffic_df['vertical_rate'] = traffic_df['vertical_rate'].round(0).astype('int16')
+        traffic_df['track'] = traffic_df['track'].round(3)
+        traffic_df['distance'] = traffic_df['distance'].round(3)
+        return traffic_df
+
+    def _log_removal_reasons(self, reasons: list[str]):
+        for reason in reasons:
+            logger.info(f"            - {reason}")
+
+
+    # ------------------------------------
+    # Step 4: Create training data
+    # ------------------------------------
+
+    def create_training_data(self):
+        logger.info(f"📊 Creating training data for {self.icao}...")
+
+        inputs_path = self._get_output_file_path_for("trajectories-inputs")
+        horizons_path = self._get_output_file_path_for("trajectories-horizons")
+        if os.path.exists(inputs_path) and os.path.exists(horizons_path):
+            logger.info(f"    ✓ Found existing input and horizon segments under {inputs_path} and {horizons_path}, skipping creation. To rerun this step, delete the files and run the method again.")
+            return
+
+        processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
+        self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
+
+        traffic = self._load_traffic(processed_trajectories_path)
+
+        logger.info(f"    - Converting to metric units...")
+        traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])
+        traffic = self._convert_to_metric_units(traffic)
+
+        logger.info(f"    - Computing local coordinates...")
+        ref_lat, ref_lon = airports[self.icao].latlon
+        traffic = assign_local_xy_coordinates(traffic, ref_lat=ref_lat, ref_lon=ref_lon)
+        
+        logger.info(f"    - Computing velocity components...")
+        traffic = assign_velocity_components(traffic, resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
+
+        logger.info(f"    - Sampling trajectories...")
+        self._log_sampling_info()
+        traffic = sample_trajectories(
+            traffic,
+            resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"],
+            data_period_minutes=self.create_training_data_config["data_period_minutes"],
+            min_trajectory_length_minutes=self.create_training_data_config["min_trajectory_length_minutes"],
         )
-        return flight if flight is not None else None
 
-    def _check_runway_alignment(self, flight: Flight, firstseen: datetime, lastseen: datetime):
-        first_ts = firstseen.timestamp()
-        last_ts = lastseen.timestamp()
-        flight_last_3min = flight.skip(seconds=(last_ts - first_ts - 180))
-        if flight_last_3min is not None:
-            rwy = flight_last_3min.aligned_on_ils(self.icao, angle_tolerance=0.1, min_duration="40sec").final()
-            if rwy is not None:
-                return rwy.max("ILS")
-        return None
+        logger.info(f"    - Segmenting input and horizon segments...")
+        input_segments, horizon_segments = get_input_horizon_segments(traffic, input_time_minutes=self.create_training_data_config["input_time_minutes"], horizon_time_minutes=self.create_training_data_config["horizon_time_minutes"], resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
 
-    # ------------------------------------
-    # Process Step
-    # ------------------------------------
+        logger.info(f"    - Saving input segments to {inputs_path}...")
+        input_segments.data.to_parquet(inputs_path)
+        logger.info(f"    - Saving horizon segments to {horizons_path}.")
+        horizon_segments.data.to_parquet(horizons_path)
 
-    def process(self):
-        # TODO: remove all flights starting before start_dt
+        logger.info(f"✅ Finished creating training data for {self.icao}.\n")
 
-        # trajectories_df = self._remove_by_callsign(flightlist_df)
-        # trajectories_df = self._remove_firstseen_before_startdate(trajectories_df)
-        pass
+    def _log_sampling_info(self):
+        input_time_minutes = self.create_training_data_config["input_time_minutes"]
+        horizon_time_minutes = self.create_training_data_config["horizon_time_minutes"]
+        resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
+        num_input_samples = input_time_minutes * 60 // resampling_rate_seconds
+        num_horizon_samples = horizon_time_minutes * 60 // resampling_rate_seconds
+        logger.info(f"        -> Input time: {input_time_minutes} minutes, Horizon: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
+        logger.info(f"        -> Number of input samples: {num_input_samples}, Number of horizon samples: {num_horizon_samples}")
 
-    def _remove_firstseen_before_startdate(self, df: pd.DataFrame):
-        return df[df["firstseen"] >= self.start_dt]
+    def _convert_to_metric_units(self, traffic: Traffic) -> Traffic:
+        traffic.data["altitude"] = (traffic.data["altitude"] * 0.3048).round(0).astype(int)                    # ft to m
+        traffic.data["vertical_rate"] = (traffic.data["vertical_rate"] * (0.3048 / 60)).round(2)               # ft/min to m/s
+        traffic.data["groundspeed"] = (traffic.data["groundspeed"] * 1.852 / 3.6).round(2)                     # kts to m/s
+        return traffic
+
+    def _convert_to_aviation_units(self, traffic: Traffic) -> Traffic:
+        traffic.data["altitude"] = (traffic.data["altitude"] / 0.3048).round(0).astype(int)                    # m to ft
+        traffic.data["vertical_rate"] = (traffic.data["vertical_rate"] / (0.3048 / 60)).round(0).astype(int)   # m/s to ft/min
+        traffic.data["groundspeed"] = (traffic.data["groundspeed"] * 3.6 / 1.852).round(2)                     # m/s to kts
+        return traffic

@@ -1,8 +1,13 @@
 import os
+import logging
 from datetime import datetime
 from dataclasses import dataclass
-
 import pandas as pd
+from traffic.data import airports
+
+from common.projections import get_circle_around_location
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ProcessingConfig:
@@ -10,6 +15,7 @@ class ProcessingConfig:
     icao_code: str
     start_dt: datetime
     end_dt: datetime
+    days_of_month: list[int] | None
     circle_radius_km: int
     dataset_dir: str
     cache_dir: str
@@ -23,6 +29,9 @@ class DatasetProcessor:
         self.radius_m = processing_config.circle_radius_km * 1000
         self.task_config = task_config
 
+        lat, lon = airports[self.icao].latlon
+        self.airport_circle = get_circle_around_location(lat, lon, self.radius_m)
+
         self.output_dir = os.path.join(processing_config.dataset_dir, self.icao, task_type)
         os.makedirs(self.output_dir, exist_ok=True)
         
@@ -33,31 +42,59 @@ class DatasetProcessor:
         else:
             self.temp_dir = None
 
-        self.all_days = pd.date_range(start=self.start_dt, end=self.end_dt, freq="D")
+        days_of_month = processing_config.days_of_month
+        self.all_days = self._get_all_days(days_of_month)
+
 
     # --------------------
-    # Utility
+    # I/O Functions
     # --------------------
-    def _get_temp_file_path_for(self, data_type: str, day: datetime = None) -> str:
+    def _get_temp_file_path_for(self, data_type: str, day: datetime = None, extension: str = "parquet") -> str:
         """Get path for temporary/intermediate files (stored in .temp directory)"""
         if day is None:
             return os.path.join(
                 self.temp_dir,
-                f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.parquet"
+                f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.{extension}"
             )
-        return os.path.join(self.temp_dir, f"{self.icao}_{data_type}_{day.date()}.parquet")
+        return os.path.join(self.temp_dir, f"{self.icao}_{data_type}_{day.date()}.{extension}")
 
-    def _get_output_file_path_for(self, data_type: str) -> str:
+    def _get_output_file_path_for(self, data_type: str, extension: str = "parquet") -> str:
         """Get path for final output files (stored directly in airport directory)"""
-        return os.path.join(self.output_dir, f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.parquet")
+        return os.path.join(self.output_dir, f"{self.icao}_{data_type}_{self.start_dt.date()}_{self.end_dt.date()}.{extension}")
+
+    def _check_current_step_file_exists(self, path: str, step_name: str) -> bool:
+        """Check if the current step's output file already exists."""
+        if os.path.exists(path):
+            logger.info(f"    ✓ Found existing output file at {path}, skipping step '{step_name}'. To rerun this step, delete the file and run the method again.")
+            logger.info(f"✅ Finished step '{step_name}' for {self.icao}.\n")
+            return True
+        return False
+
+    def _ensure_previous_step_file_exists(self, path: str, previous_step_name: str):
+        """Check if the previous step's output file exists."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Output file from '{previous_step_name}' step not found at {path}. Please run the previous step '{previous_step_name}' first.")
 
     def _save_data(self, df: pd.DataFrame, path: str, sortby: str = None):
+        """Save DataFrame to parquet file."""
         if sortby:
             df.sort_values(sortby, inplace=True)
         df.reset_index(drop=True, inplace=True)
-        df.to_parquet(path)
+        try:
+            df.to_parquet(path)
+        except (MemoryError, OSError) as e:
+            # If save fails due to OOM or disk issues, remove incomplete file
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError as remove_error:
+                    logger.error(f"    ✗ Failed to save data to {path} and could not remove incomplete file: {remove_error}")
+            else:
+                logger.error(f"    ✗ Failed to save data to {path}: {e}")
+            raise
 
     def _merge_files(self, daily_file_paths: list[str], sortby: str = None) -> pd.DataFrame:
+        """Merge daily parquet files into a single DataFrame."""
         merged = pd.concat([pd.read_parquet(p) for p in daily_file_paths], ignore_index=True)
         if sortby:
             merged.sort_values(sortby, inplace=True)
@@ -65,6 +102,19 @@ class DatasetProcessor:
         return merged
 
     def _load_data(self, path: str) -> pd.DataFrame:
+        """Load DataFrame from parquet file."""
         if not os.path.exists(path):
             raise FileNotFoundError(f"File not found at {path}")
         return pd.read_parquet(path)
+
+    # --------------------
+    # Helper Functions
+    # --------------------
+    def _get_all_days(self, days_of_month: list[int] = None) -> list[datetime]:
+        """Get list of all days in the date range. Keeps only the days specified in days_of_month."""
+        all_days = pd.date_range(start=self.start_dt, end=self.end_dt, freq="D").date.tolist()
+        if days_of_month is None: # do not do any filtering
+            return all_days
+        else:
+            return [day for day in all_days if day.day in days_of_month]
+

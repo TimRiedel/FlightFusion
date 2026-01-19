@@ -110,22 +110,25 @@ class WeatherProcessor(DatasetProcessor):
     # ------------------------------------
 
     def process(self):
-        output_path = self._get_output_file_path_for("weather", extension="zarr")
         logger.info(f"📦 Merging {self.dataset_name.upper()} reanalysis data...")
-
-        months = self._get_months_to_download()
-        merged_exists = os.path.exists(output_path)
-        if merged_exists:
-            logger.info(f"    ✗ Merged ZARR file already exists under {output_path}. Skipping processing and merging...")
+        output_path = self._get_output_file_path_for("weather", extension="zarr")
+        if self._check_current_step_file_exists(output_path, "merging"):
             return
 
+        # Ensure all monthly downloads exist before starting processing
+        months = self._get_months_to_download()
+        for year, month in months:
+            request_config = self._get_request_config(year, month)
+            file_path, exists_cached = self.cache.get_file_path(request_config)
+            if not exists_cached:
+                raise FileNotFoundError(f"Cached {self.dataset_name.upper()} data not found at {file_path}. Please run the download method first.")
+
+        # Merge monthly data into a single Zarr file
+        merged_exists = False
         for year, month in months:
             request_config = self._get_request_config(year, month)
             file_path, exists_cached = self.cache.get_file_path(request_config)
             logger.info(f"    - Processing month {month:02d}-{year}...")
-
-            if not exists_cached:
-                raise FileNotFoundError(f"Cached {self.dataset_name.upper()} data not found at {file_path}. Please run the download method first.")
 
             logger.info(f"        - Bringing GRIB data into the correct format...")
             month_ds = self.weather_downloader.retrieve_xr_dataset_from_grib(file_path)

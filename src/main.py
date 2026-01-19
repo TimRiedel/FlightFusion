@@ -8,18 +8,30 @@ from utils.logger import logger
 from weather import MetarProcessor, WeatherProcessor
 
 
+def log_config(cfg):
+    logger.info("==================== Configuration ====================")
+    logger.info(f"Task: {cfg['task']}")
+    logger.info(f"Step: {cfg['step']}")
+    logger.info(f"Airports: {cfg['airports']}")
+    logger.info(f"Start: {cfg['start']}")
+    logger.info(f"End: {cfg['end']}")
+    if 'days_of_month' in cfg:
+        logger.info(f"Days of month: {cfg['days_of_month']}")
+    logger.info(f"Radius: {cfg['radius_km']}")
+    logger.info(f"Dataset dir: {cfg['dataset_dir']}")
+    logger.info(f"Cache dir: {cfg['cache_dir']}\n")
+
 def main():
     parser = argparse.ArgumentParser(description="FlightFusion data pipeline")
     parser.add_argument("--airports", help="One or more airport ICAO codes (e.g. EDDM,EDDL)")
     parser.add_argument("--start", type=str, help="Start date/time (YYYY-MM-DDTHH:MM)")
     parser.add_argument("--end", type=str, help="End date/time (YYYY-MM-DDTHH:MM)")
     parser.add_argument("--task", choices=ALL_TASKS, default="all", help="Task to execute in the pipeline.")
-    parser.add_argument("--step", choices=ALL_STEPS, default="all", help=f"Which step to execute from the specified task. Step 'all' is available for every task. For task 'flights': {', '.join(TASK_STEPS['flights'])}. For task 'metar': {', '.join(TASK_STEPS['metar'])}. For task 'weather': {', '.join(TASK_STEPS['weather'])}.")
+    parser.add_argument("--step", choices=ALL_STEPS, default="all", help=f"Which step to execute from the specified task. Step 'all' is available for every task. For task 'flights': {', '.join(TASK_STEPS['trajectories'])}. For task 'metar': {', '.join(TASK_STEPS['metar'])}. For task 'weather': {', '.join(TASK_STEPS['weather'])}.")
     parser.add_argument("--config", default="debug_config.yaml", help="Path to config file")
 
     args = parser.parse_args()
     cfg = load_config(args.config, args)
-
 
     airports = cfg["airports"]
     start_dt = datetime.fromisoformat(cfg["start"])
@@ -28,19 +40,22 @@ def main():
     step = cfg["step"]
 
     logger.info(f"🚀 Starting FlightFusion pipeline for airports: {airports}, from {start_dt} to {end_dt}\n")
+    log_config(cfg)
+
 
     for icao in airports:
         processing_config = ProcessingConfig(
             icao_code=icao,
             start_dt=start_dt,
             end_dt=end_dt,
+            days_of_month=cfg.get("days_of_month", None),
             circle_radius_km=cfg["radius_km"],
             dataset_dir=cfg["dataset_dir"],
             cache_dir=cfg["cache_dir"]
         )
 
         if task in ["metar", "all"]:
-            logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
+            logger.info(f"==================== Running task 'metar' for {icao} ====================\n")
 
             metar_processor = MetarProcessor(processing_config, cfg)
             if step in ["all", "download"]:
@@ -51,7 +66,7 @@ def main():
                 metar_processor.process()
 
         if task in ["weather", "all"]:
-            logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
+            logger.info(f"==================== Running task 'weather' for {icao} ====================\n")
 
             weather_processor = WeatherProcessor(processing_config, cfg["weather"])
             if step in ["all", "download"]:
@@ -59,17 +74,18 @@ def main():
             if step in ["all", "merge"]:
                 weather_processor.process()
 
-        if task in ["flights", "all"]:
-            logger.info(f"==================== Running task '{task}' for {icao} ====================\n")
+        if task in ["trajectories", "all"]:
+            logger.info(f"==================== Running task 'trajectories' for {icao} ====================\n")
 
-            trajectory_processor = TrajectoryProcessor(processing_config, cfg["flights"])
-            if step in ["all", "download_flightlist"]:
-                trajectory_processor.download_flightlist()
-            if step in ["all", "download_trajectories"]:
+            trajectory_processor = TrajectoryProcessor(processing_config, cfg["trajectories"])
+            if step in ["all", "download"]:
                 trajectory_processor.download_trajectories()
+            if step in ["all", "clean"]:
+                trajectory_processor.clean_trajectories()
             if step in ["all", "process"]:
-                trajectory_processor.process()
-
+                trajectory_processor.process_trajectories()
+            if step in ["all", "create_training_data"]:
+                trajectory_processor.create_training_data()
 
     logger.info("=======================================================================\n")
     logger.info("✅ All tasks completed successfully.\n")
