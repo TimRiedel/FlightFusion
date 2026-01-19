@@ -4,6 +4,7 @@ import yaml
 
 TASK_STEPS = {
     "trajectories": ["download", "clean", "process", "create_training_data", "all"],
+    "flightinfo": ["extract", "all"],
     "metar": ["download", "parse", "process", "all"],
     "weather": ["download", "merge", "all"],
     "all": ["all"],

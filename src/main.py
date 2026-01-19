@@ -2,7 +2,7 @@ import argparse
 from datetime import datetime
 
 from common.dataset_processor import ProcessingConfig
-from trajectories import TrajectoryProcessor
+from trajectories import FlightInfoProcessor, TrajectoryProcessor
 from utils.config_loader import ALL_STEPS, ALL_TASKS, TASK_STEPS, load_config
 from utils.logger import logger
 from weather import MetarProcessor, WeatherProcessor
@@ -86,6 +86,13 @@ def main():
                 trajectory_processor.process_trajectories()
             if step in ["all", "create_training_data"]:
                 trajectory_processor.create_training_data()
+
+        if task in ["flightinfo", "all"]:
+            logger.info(f"==================== Running task 'flightinfo' for {icao} ====================\n")
+
+            flightinfo_processor = FlightInfoProcessor(processing_config, cfg.get("flightinfo", {}))
+            if step in ["all", "extract"]:
+                flightinfo_processor.extract()
 
     logger.info("=======================================================================\n")
     logger.info("✅ All tasks completed successfully.\n")

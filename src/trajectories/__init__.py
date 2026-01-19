@@ -1,1 +1,2 @@
 from .trajectory_processor import TrajectoryProcessor
+from .flightinfo_processor import FlightInfoProcessor
