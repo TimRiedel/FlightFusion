@@ -314,7 +314,7 @@ def remove_flights_without_runway_alignment(traffic: Traffic, icao: str, final_a
     for flight in traffic:
         runway_alignments = _get_runway_alignments(flight, icao, final_approach_time_seconds, angle_tolerance, min_duration_seconds)
         if runway_alignments is not None:
-            flight = _clip_flight_to_runway_threshold(flight, runway_alignments)
+            flight = _clip_flight_to_runway_threshold(flight, runway_alignments, icao)
             if flight.data.empty:
                 removal_reasons.append(f"Flight {flight.flight_id} had empty data after clipping to runway alignment.")
             else:
@@ -397,20 +397,19 @@ def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIt
     flight_df = flight.data.copy()
     last_alignment_idx = len(runway_alignments) - 1
     for i, alignment in enumerate(runway_alignments):
-        # For all indices in alignment.data, assign 'airport' and 'ILS' to flight_df
+
         idxs = alignment.data.index
         flight_df.loc[idxs, 'airport'] = alignment.data['airport']
         flight_df.loc[idxs, 'ILS'] = alignment.data['ILS']
         if i != last_alignment_idx:
             continue
-
         # Obtain the location of the threshold for the landing runway
         icao, ils = alignment.data.iloc[-1]['airport'], alignment.data.iloc[-1]['ILS']
         runway_thresholds = airports[icao].runways[ils].tuple_runway
         threshold = next(t for t in runway_thresholds if t.name == ils)
 
         # Calculate the closest point to the threshold, which is still before the threshold
-        closest_point_idx, closest_distance = _calculate_closest_point_to_threshold(flight_df, threshold)
+        closest_point_idx, closest_distance = _calculate_closest_point_to_threshold(alignment.data, threshold)
         # if closest_distance > max_point_distance_from_threshold / 1000:
         #     print(f"Warning: Closest point is {closest_distance:.2f} km from threshold {threshold.name}, which is greater than the maximum distance of {max_point_distance_from_threshold / 1000:.2f} km.")
         

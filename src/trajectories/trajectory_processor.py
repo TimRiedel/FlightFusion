@@ -237,6 +237,19 @@ class TrajectoryProcessor(DatasetProcessor):
             departure_traffic = filter_traffic_by_type(processed_traffic, "departures") if self.traffic_type == "all" else None
             
             if not arrival_traffic.data.empty:
+                # Remove flights with go-around or holding
+                go_around_config = remove_config.get("remove_go_around", {})
+                if go_around_config.get("enabled", True):
+                    logger.info(f"        - Removing flights with go-around or holding...")
+                    arrival_traffic, go_around_holding_flights, reasons = remove_flights_with_go_around_holding(
+                        arrival_traffic, 
+                        icao, 
+                        track_threshold=go_around_config.get("track_threshold", 330),
+                        time_window_seconds=go_around_config.get("time_window_seconds", 500)
+                    )
+                    removed_traffic_dfs.append(go_around_holding_flights.data)
+                    self._log_removal_reasons(reasons)
+
                 # Remove flights without runway alignment
                 runway_alignment_config = remove_config.get("remove_without_runway_alignment", {})
                 if runway_alignment_config.get("enabled", True):
@@ -249,19 +262,6 @@ class TrajectoryProcessor(DatasetProcessor):
                         min_duration_seconds=runway_alignment_config.get("min_duration_seconds", 40)
                     )
                     removed_traffic_dfs.append(no_runway_alignment_flights.data)
-                    self._log_removal_reasons(reasons)
-                
-                # Remove flights with go-around or holding
-                go_around_config = remove_config.get("remove_go_around", {})
-                if go_around_config.get("enabled", True):
-                    logger.info(f"        - Removing flights with go-around or holding...")
-                    arrival_traffic, go_around_holding_flights, reasons = remove_flights_with_go_around_holding(
-                        arrival_traffic, 
-                        icao, 
-                        track_threshold=go_around_config.get("track_threshold", 330),
-                        time_window_seconds=go_around_config.get("time_window_seconds", 500)
-                    )
-                    removed_traffic_dfs.append(go_around_holding_flights.data)
                     self._log_removal_reasons(reasons)
 
             # Merge back with departures if needed

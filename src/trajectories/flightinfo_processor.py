@@ -43,9 +43,9 @@ class FlightInfoProcessor(DatasetProcessor):
 
     def _aggregate_flight_info(self, trajectories_df: pd.DataFrame) -> pd.DataFrame:
         flight_info_df = trajectories_df.groupby("flight_id").agg(
-            airport=("airport", "first"),
-            icao24=("icao24", "first"),
-            callsign=("callsign", "first"),
+            airport=("airport", "last"),
+            icao24=("icao24", "last"),
+            callsign=("callsign", "last"),
             runway=("ILS", "last")
         ).reset_index()
         return flight_info_df
