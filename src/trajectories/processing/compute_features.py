@@ -5,7 +5,7 @@ import pyproj
 from traffic.core import Traffic, Flight
 
 from .great_circle_calculations import haversine_distance
-from .projections import get_projection_wgs84_to_aeqd
+from .projections import get_transformer_wgs84_to_aeqd
 
 
 def assign_flight_id(traffic: Traffic, split_by_gap: bool = True, gap_threshold_minutes: int = 60) -> Traffic:
@@ -380,8 +380,8 @@ def assign_local_xy_coordinates(traffic: Traffic, ref_lat: float, ref_lon: float
     """
     df = traffic.data.copy()
 
-    transformer_wgs84_to_aeqd = get_projection_wgs84_to_aeqd(ref_lat, ref_lon)
-    x_m, y_m = transformer_wgs84_to_aeqd(df["longitude"].to_numpy(), df["latitude"].to_numpy())
+    transformer_wgs84_to_aeqd = get_transformer_wgs84_to_aeqd(ref_lat, ref_lon)
+    x_m, y_m = transformer_wgs84_to_aeqd.transform(df["longitude"].to_numpy(), df["latitude"].to_numpy())
     df["x_coord"] = x_m.round(2)
     df["y_coord"] = y_m.round(2)
     
