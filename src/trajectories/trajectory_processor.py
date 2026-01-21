@@ -71,17 +71,16 @@ class TrajectoryProcessor(DatasetProcessor):
             if exists_cached:
                 logger.info(f"        ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {cache_path}, skipping download.")
                 traffic = Traffic(self._load_data(cache_path))
-                all_traffic_dfs.append(traffic.data)
-                continue
+            else:
+                traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
+                self._save_data(traffic.data, cache_path)
 
-            traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
             traffic = drop_irrelevant_attributes(traffic, self.drop_attributes)
             traffic = assign_flight_id(traffic)
             traffic = assign_distance_to_target(traffic, lat, lon)
             if self.crop_to_circle:
                 traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
-            self._save_data(traffic.data, cache_path)
             logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to cache {cache_path}.")
             all_traffic_dfs.append(traffic.data)
 
