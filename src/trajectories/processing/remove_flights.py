@@ -368,7 +368,7 @@ def _get_runway_alignments(flight: Flight, icao: str, final_approach_time_second
     return None
 
 
-def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIterator, max_point_distance_from_threshold: int = 1500) -> Flight:
+def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIterator, icao: str) -> Flight:
     """
     Clips a flight trajectory to the runway threshold.
     
@@ -379,19 +379,18 @@ def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIt
     Parameters
     -------
     flight : Flight
-        Flight object to clip. Must contain 'latitude', 'longitude', 'altitude',
+        Flight object to clip. Must contain 'latitude', 'longitude', 'altitude' (ft),
         'track', and 'timestamp' columns.
     runway_alignments : FlightIterator
         FlightIterator containing runway alignment segments from aligned_on_ils.
-    max_point_distance_from_threshold : int, optional
-        Maximum allowed distance from threshold in meters. If the closest point
-        exceeds this distance, a warning is printed. Default is 1500.
+    icao : str
+        ICAO code of the airport (e.g., 'EDDF' for Frankfurt).
     
     Returns
     -------
     Flight
         Flight object clipped to the runway threshold. The last point is set to
-        the threshold location with altitude 50 feet and updated track bearing.
+        the threshold location with altitude of the airport (ft) + 50ft (15m) and updated track bearing.
         Airport and ILS columns are added to aligned segments.
     """
     flight_df = flight.data.copy()
@@ -418,7 +417,7 @@ def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIt
         last_point = flight_df.iloc[-1].copy()
         last_point['latitude'] = threshold.latitude
         last_point['longitude'] = threshold.longitude
-        last_point['altitude'] = 50
+        last_point['altitude'] = airports[icao].altitude + 15
         last_point['track'] = haversine_bearing(last_point['latitude'], last_point['longitude'], threshold.latitude, threshold.longitude)
         last_point['timestamp'] = pd.to_datetime(last_point['timestamp']) + pd.Timedelta(seconds=1)
         flight_df = pd.concat([flight_df, pd.DataFrame([last_point])], ignore_index=True)
