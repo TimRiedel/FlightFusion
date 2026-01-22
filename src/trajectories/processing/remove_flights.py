@@ -363,7 +363,7 @@ def _get_runway_alignments(flight: Flight, icao: str, final_approach_time_second
 
     if final_segment is not None:
         rwy_alignments = final_segment.aligned_on_ils(icao, angle_tolerance=angle_tolerance, min_duration=f"{min_duration_seconds}sec")
-        if rwy_alignments is not None:
+        if len(list(rwy_alignments)) > 0:
             return rwy_alignments
     return None
 

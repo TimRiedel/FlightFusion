@@ -44,7 +44,7 @@ class TrajectoryProcessor(DatasetProcessor):
     def _load_traffic(self, path: str) -> Traffic:
         traffic = Traffic(self._load_data(path))
         if traffic.data.empty:
-            logger.warning(f"    ✗ Traffic data is empty at {path}.")
+            raise ValueError(f"Traffic data is empty at {path}.")
         return traffic
 
     # ------------------------------------
