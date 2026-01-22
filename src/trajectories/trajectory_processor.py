@@ -256,9 +256,8 @@ class TrajectoryProcessor(DatasetProcessor):
                     arrival_traffic, no_runway_alignment_flights, reasons = remove_flights_without_runway_alignment(
                         arrival_traffic, 
                         icao, 
-                        final_approach_time_seconds=runway_alignment_config.get("final_approach_time_seconds", 180),
                         angle_tolerance=runway_alignment_config.get("angle_tolerance", 0.1),
-                        min_duration_seconds=runway_alignment_config.get("min_duration_seconds", 40)
+                        min_alignment_duration_seconds=runway_alignment_config.get("min_alignment_duration_seconds", 40)
                     )
                     removed_traffic_dfs.append(no_runway_alignment_flights.data)
                     self._log_removal_reasons(reasons)

@@ -1,7 +1,7 @@
 defaults:
   airports: ["EDDB"]
   start: "2024-01-01T00:00"
-  end: "2024-01-31T23:59"
+  end: "2024-12-31T23:59"
   days_of_month: [1, 2, 3]
   radius_km: 300
   dataset_dir: "/sc/projects/sci-naumann/chair/tim.riedel/FlightFusion/datasets"
@@ -42,9 +42,8 @@ trajectories:
         continuity_threshold_seconds: 120
       remove_without_runway_alignment:
         enabled: true
-        final_approach_time_seconds: 180
         angle_tolerance: 0.1
-        min_duration_seconds: 40
+        min_alignment_duration_seconds: 40 # this must be adjusted to the airport and most common aircraft types (for many visual approaches, use ~25 seconds, for standard ILS use > 40-60 seconds)
       remove_go_around:
         enabled: true
         track_threshold: 330
