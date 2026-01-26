@@ -50,7 +50,7 @@ trajectories:
         time_window_seconds: 500
 
   create_training_data:
-    resampling_rate_seconds: 20
+    resampling_rate_seconds: 30
     input_time_minutes: 5
     horizon_time_minutes: 40
     data_period_minutes: 5
