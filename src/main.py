@@ -28,7 +28,7 @@ def main():
     parser.add_argument("--end", type=str, help="End date/time (YYYY-MM-DDTHH:MM)")
     parser.add_argument("--task", choices=ALL_TASKS, default="all", help="Task to execute in the pipeline.")
     parser.add_argument("--step", choices=ALL_STEPS, default="all", help=f"Which step to execute from the specified task. Step 'all' is available for every task. For task 'flights': {', '.join(TASK_STEPS['trajectories'])}. For task 'metar': {', '.join(TASK_STEPS['metar'])}. For task 'weather': {', '.join(TASK_STEPS['weather'])}.")
-    parser.add_argument("--config", default="debug_config.yaml", help="Path to config file")
+    parser.add_argument("--config", default="debug.yaml", help="Path to config file")
 
     args = parser.parse_args()
     cfg = load_config(args.config, args)

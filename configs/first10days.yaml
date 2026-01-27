@@ -1,0 +1,65 @@
+defaults:
+  airports: ["EDDB"]
+  start: "2024-01-01T00:00"
+  end: "2024-12-31T23:59"
+  days_of_month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  radius_km: 300
+  dataset_dir: "/sc/projects/sci-naumann/chair/tim.riedel/FlightFusion/datasets"
+  cache_dir: "/sc/projects/sci-naumann/chair/tim.riedel/FlightFusion/.cache"
+  task: "all"
+  step: "all"
+
+trajectories:
+  traffic_type: "arrivals"      # "all", "arrivals", "departures"
+  crop_to_circle: true
+  drop_attributes: ["alert", "spi", "geoaltitude", "last_position", "lastcontact", "serials", "hour", "onground"]
+
+  process:
+    filter_traffic_by_airlines:
+      enabled: true
+      excluded_callsigns: ["CHX", "GAF", "BPO", "FCK", "AMB", "DCA", "PBW", "HUM", "DIL"]
+      top_n_airlines: 100 # If None, no filtering is applied.
+
+    clean: # Cleaning steps
+      remove_outliers_altitude:
+        threshold: 300
+        window_size: 20
+        handle_outliers: "drop"  # "drop" or "interpolate"
+      remove_outliers_groundspeed:
+        threshold: 20
+        window_size: 10
+        handle_outliers: "drop"  # "drop" or "interpolate"
+      remove_lateral_outliers:
+        window_size: 100
+        deviation_factor: 10
+
+    remove_flights: # Flight removal steps
+      remove_small_duration:
+        enabled: true
+        threshold_seconds: 60
+      remove_non_continuous:
+        enabled: true
+        continuity_threshold_seconds: 120
+      remove_without_runway_alignment:
+        enabled: true
+        angle_tolerance: 0.1
+        min_alignment_duration_seconds: 90 # this must be adjusted to the airport and most common aircraft types (for some visual approaches, use ~25 seconds, for standard ILS use > 60 - 180 seconds)
+      remove_go_around:
+        enabled: true
+        track_threshold: 330
+        time_window_seconds: 500
+
+  create_training_data:
+    resampling_rate_seconds: 30
+    input_time_minutes: 5
+    horizon_time_minutes: 40
+    data_period_minutes: 5
+    min_trajectory_length_minutes: 8
+    selected_runways: ["24L"]
+
+weather:
+  dataset_name: "cerra"
+  variables: ["temperature", "u_component_of_wind", "v_component_of_wind"]
+  pressure_levels: [975, 900, 800, 600, 400, 200]
+  grid_num_x: 64
+  grid_num_y: 64
