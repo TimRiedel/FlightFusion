@@ -44,7 +44,7 @@ class TrajectoryProcessor(DatasetProcessor):
     def _load_traffic(self, path: str) -> Traffic:
         traffic = Traffic(self._load_data(path))
         if traffic.data.empty:
-            logger.warning(f"    ✗ Traffic data is empty at {path}.")
+            raise ValueError(f"Traffic data is empty at {path}.")
         return traffic
 
     # ------------------------------------
@@ -71,17 +71,16 @@ class TrajectoryProcessor(DatasetProcessor):
             if exists_cached:
                 logger.info(f"        ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {cache_path}, skipping download.")
                 traffic = Traffic(self._load_data(cache_path))
-                all_traffic_dfs.append(traffic.data)
-                continue
+            else:
+                traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
+                self._save_data(traffic.data, cache_path)
 
-            traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
             traffic = drop_irrelevant_attributes(traffic, self.drop_attributes)
             traffic = assign_flight_id(traffic)
             traffic = assign_distance_to_target(traffic, lat, lon)
             if self.crop_to_circle:
                 traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
-            self._save_data(traffic.data, cache_path)
             logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to cache {cache_path}.")
             all_traffic_dfs.append(traffic.data)
 
@@ -237,20 +236,6 @@ class TrajectoryProcessor(DatasetProcessor):
             departure_traffic = filter_traffic_by_type(processed_traffic, "departures") if self.traffic_type == "all" else None
             
             if not arrival_traffic.data.empty:
-                # Remove flights without runway alignment
-                runway_alignment_config = remove_config.get("remove_without_runway_alignment", {})
-                if runway_alignment_config.get("enabled", True):
-                    logger.info(f"        - Removing flights without runway alignment...")
-                    arrival_traffic, no_runway_alignment_flights, reasons = remove_flights_without_runway_alignment(
-                        arrival_traffic, 
-                        icao, 
-                        final_approach_time_seconds=runway_alignment_config.get("final_approach_time_seconds", 180),
-                        angle_tolerance=runway_alignment_config.get("angle_tolerance", 0.1),
-                        min_duration_seconds=runway_alignment_config.get("min_duration_seconds", 40)
-                    )
-                    removed_traffic_dfs.append(no_runway_alignment_flights.data)
-                    self._log_removal_reasons(reasons)
-                
                 # Remove flights with go-around or holding
                 go_around_config = remove_config.get("remove_go_around", {})
                 if go_around_config.get("enabled", True):
@@ -262,6 +247,19 @@ class TrajectoryProcessor(DatasetProcessor):
                         time_window_seconds=go_around_config.get("time_window_seconds", 500)
                     )
                     removed_traffic_dfs.append(go_around_holding_flights.data)
+                    self._log_removal_reasons(reasons)
+
+                # Remove flights without runway alignment
+                runway_alignment_config = remove_config.get("remove_without_runway_alignment", {})
+                if runway_alignment_config.get("enabled", True):
+                    logger.info(f"        - Removing flights without runway alignment...")
+                    arrival_traffic, no_runway_alignment_flights, reasons = remove_flights_without_runway_alignment(
+                        arrival_traffic, 
+                        icao, 
+                        angle_tolerance=runway_alignment_config.get("angle_tolerance", 0.1),
+                        min_alignment_duration_seconds=runway_alignment_config.get("min_alignment_duration_seconds", 40)
+                    )
+                    removed_traffic_dfs.append(no_runway_alignment_flights.data)
                     self._log_removal_reasons(reasons)
 
             # Merge back with departures if needed

@@ -277,12 +277,11 @@ def has_track_change_for_go_around(flight: Flight, track_threshold: int = 300) -
 # Runway alignment functions
 # --------------------------------
 
-def remove_flights_without_runway_alignment(traffic: Traffic, icao: str, final_approach_time_seconds: int = 180, angle_tolerance: float = 0.1, min_duration_seconds: int = 40) -> tuple[Traffic, Traffic]:
+def remove_flights_without_runway_alignment(traffic: Traffic, icao: str, angle_tolerance: float = 0.1, min_alignment_duration_seconds: int = 40) -> tuple[Traffic, Traffic]:
     """
     Removes flights without runway alignment and clips valid flights to runway threshold.
     
-    Checks each flight for alignment with an ILS runway during the final approach
-    segment. Flights with valid runway alignment are clipped to the runway threshold,
+    Checks each flight for alignment with an ILS runway. Flights with valid runway alignment are clipped to the runway threshold,
     while flights without alignment are removed.
     
     Parameters
@@ -292,12 +291,10 @@ def remove_flights_without_runway_alignment(traffic: Traffic, icao: str, final_a
         'latitude', and 'longitude' columns.
     icao : str
         ICAO code of the airport (e.g., 'EDDF' for Frankfurt).
-    final_approach_time_seconds : int, optional
-        Duration of the final approach segment to analyze in seconds. Default is 180.
     angle_tolerance : float, optional
         Angular tolerance in radians for runway alignment detection. Default is 0.1.
-    min_duration_seconds : int, optional
-        Minimum duration of alignment required in seconds. Default is 40.
+    min_alignment_duration_seconds : int, optional
+        Minimum duration of runway alignment required in seconds. Default is 40.
     
     Returns
     -------
@@ -312,9 +309,9 @@ def remove_flights_without_runway_alignment(traffic: Traffic, icao: str, final_a
     removed_flight_dfs = []
     removal_reasons = []
     for flight in traffic:
-        runway_alignments = _get_runway_alignments(flight, icao, final_approach_time_seconds, angle_tolerance, min_duration_seconds)
+        runway_alignments = _get_runway_alignments(flight, icao, angle_tolerance, min_alignment_duration_seconds)
         if runway_alignments is not None:
-            flight = _clip_flight_to_runway_threshold(flight, runway_alignments)
+            flight = _clip_flight_to_runway_threshold(flight, runway_alignments, icao)
             if flight.data.empty:
                 removal_reasons.append(f"Flight {flight.flight_id} had empty data after clipping to runway alignment.")
             else:
@@ -327,7 +324,7 @@ def remove_flights_without_runway_alignment(traffic: Traffic, icao: str, final_a
     removed_df = pd.concat(removed_flight_dfs, ignore_index=True) if len(removed_flight_dfs) > 0 else pd.DataFrame(columns=traffic.data.columns)
     return Traffic(valid_df), Traffic(removed_df), removal_reasons
 
-def _get_runway_alignments(flight: Flight, icao: str, final_approach_time_seconds: int = 180, angle_tolerance: float = 0.1, min_duration_seconds: int = 40) -> Optional[str]:
+def _get_runway_alignments(flight: Flight, icao: str, angle_tolerance: float = 0.1, min_alignment_duration_seconds: int = 40) -> Optional[str]:
     """
     Gets runway alignments for a flight during the final approach segment.
     
@@ -340,8 +337,6 @@ def _get_runway_alignments(flight: Flight, icao: str, final_approach_time_second
         Flight object to analyze. Must contain 'timestamp' column.
     icao : str
         ICAO code of the airport (e.g., 'EDDF' for Frankfurt).
-    final_approach_time_seconds : int, optional
-        Duration of the final approach segment to analyze in seconds. Default is 180.
     angle_tolerance : float, optional
         Angular tolerance in radians for runway alignment detection. Default is 0.1.
     min_duration_seconds : int, optional
@@ -352,23 +347,12 @@ def _get_runway_alignments(flight: Flight, icao: str, final_approach_time_second
     FlightIterator | None
         FlightIterator containing runway alignment segments if found, None otherwise.
     """
-    flight_df = flight.data
-    flight_df = flight_df.sort_values(by='timestamp').reset_index(drop=True)
-
-    firstseen = pd.to_datetime(flight_df['timestamp'].iloc[0])
-    lastseen = pd.to_datetime(flight_df['timestamp'].iloc[-1])
-    total_duration = (lastseen - firstseen).total_seconds()
-    skip_seconds = int(max(0, total_duration - final_approach_time_seconds))
-    final_segment = flight.skip(seconds=skip_seconds)
-
-    if final_segment is not None:
-        rwy_alignments = final_segment.aligned_on_ils(icao, angle_tolerance=angle_tolerance, min_duration=f"{min_duration_seconds}sec")
-        if rwy_alignments is not None:
-            return rwy_alignments
-    return None
+    rwy_alignments = flight.aligned_on_ils(icao, angle_tolerance=angle_tolerance, min_duration=f"{min_alignment_duration_seconds}sec")
+    if len(list(rwy_alignments)) > 0:
+        return rwy_alignments
 
 
-def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIterator, max_point_distance_from_threshold: int = 1500) -> Flight:
+def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIterator, icao: str) -> Flight:
     """
     Clips a flight trajectory to the runway threshold.
     
@@ -379,38 +363,36 @@ def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIt
     Parameters
     -------
     flight : Flight
-        Flight object to clip. Must contain 'latitude', 'longitude', 'altitude',
+        Flight object to clip. Must contain 'latitude', 'longitude', 'altitude' (ft),
         'track', and 'timestamp' columns.
     runway_alignments : FlightIterator
         FlightIterator containing runway alignment segments from aligned_on_ils.
-    max_point_distance_from_threshold : int, optional
-        Maximum allowed distance from threshold in meters. If the closest point
-        exceeds this distance, a warning is printed. Default is 1500.
+    icao : str
+        ICAO code of the airport (e.g., 'EDDF' for Frankfurt).
     
     Returns
     -------
     Flight
         Flight object clipped to the runway threshold. The last point is set to
-        the threshold location with altitude 50 feet and updated track bearing.
+        the threshold location with altitude of the airport (ft) + 50ft (15m) and updated track bearing.
         Airport and ILS columns are added to aligned segments.
     """
     flight_df = flight.data.copy()
-    last_alignment_idx = len(runway_alignments) - 1
-    for i, alignment in enumerate(runway_alignments):
-        # For all indices in alignment.data, assign 'airport' and 'ILS' to flight_df
+    last_alignment_idx = len(list(runway_alignments)) - 1
+    for i, alignment in enumerate(list(runway_alignments)):
+
         idxs = alignment.data.index
         flight_df.loc[idxs, 'airport'] = alignment.data['airport']
         flight_df.loc[idxs, 'ILS'] = alignment.data['ILS']
         if i != last_alignment_idx:
             continue
-
         # Obtain the location of the threshold for the landing runway
         icao, ils = alignment.data.iloc[-1]['airport'], alignment.data.iloc[-1]['ILS']
         runway_thresholds = airports[icao].runways[ils].tuple_runway
         threshold = next(t for t in runway_thresholds if t.name == ils)
 
         # Calculate the closest point to the threshold, which is still before the threshold
-        closest_point_idx, closest_distance = _calculate_closest_point_to_threshold(flight_df, threshold)
+        closest_point_idx, closest_distance = _calculate_closest_point_to_threshold(alignment.data, threshold)
         # if closest_distance > max_point_distance_from_threshold / 1000:
         #     print(f"Warning: Closest point is {closest_distance:.2f} km from threshold {threshold.name}, which is greater than the maximum distance of {max_point_distance_from_threshold / 1000:.2f} km.")
         
@@ -419,7 +401,7 @@ def _clip_flight_to_runway_threshold(flight: Flight, runway_alignments: FlightIt
         last_point = flight_df.iloc[-1].copy()
         last_point['latitude'] = threshold.latitude
         last_point['longitude'] = threshold.longitude
-        last_point['altitude'] = 50
+        last_point['altitude'] = airports[icao].altitude + 15
         last_point['track'] = haversine_bearing(last_point['latitude'], last_point['longitude'], threshold.latitude, threshold.longitude)
         last_point['timestamp'] = pd.to_datetime(last_point['timestamp']) + pd.Timedelta(seconds=1)
         flight_df = pd.concat([flight_df, pd.DataFrame([last_point])], ignore_index=True)

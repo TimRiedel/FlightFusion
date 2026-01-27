@@ -1,13 +1,11 @@
 import os
-import logging
 from datetime import datetime
 from dataclasses import dataclass
 import pandas as pd
 from traffic.data import airports
 
 from common.projections import get_circle_around_location
-
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 @dataclass
 class ProcessingConfig:

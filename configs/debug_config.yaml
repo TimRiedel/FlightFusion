@@ -42,16 +42,15 @@ trajectories:
         continuity_threshold_seconds: 120
       remove_without_runway_alignment:
         enabled: true
-        final_approach_time_seconds: 180
         angle_tolerance: 0.1
-        min_duration_seconds: 40
+        min_alignment_duration_seconds: 40 # this must be adjusted to the airport and most common aircraft types (for many visual approaches, use ~25 seconds, for standard ILS use > 40-60 seconds)
       remove_go_around:
         enabled: true
         track_threshold: 330
         time_window_seconds: 500
 
   create_training_data:
-    resampling_rate_seconds: 20
+    resampling_rate_seconds: 30
     input_time_minutes: 5
     horizon_time_minutes: 40
     data_period_minutes: 5
