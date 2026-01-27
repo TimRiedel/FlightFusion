@@ -43,7 +43,7 @@ trajectories:
       remove_without_runway_alignment:
         enabled: true
         angle_tolerance: 0.1
-        min_alignment_duration_seconds: 40 # this must be adjusted to the airport and most common aircraft types (for many visual approaches, use ~25 seconds, for standard ILS use > 40-60 seconds)
+        min_alignment_duration_seconds: 90 # this must be adjusted to the airport and most common aircraft types (for some visual approaches, use ~25 seconds, for standard ILS use > 60 - 180 seconds)
       remove_go_around:
         enabled: true
         track_threshold: 330
@@ -55,6 +55,7 @@ trajectories:
     horizon_time_minutes: 40
     data_period_minutes: 5
     min_trajectory_length_minutes: 8
+    selected_runways: ["24L"]
 
 weather:
   dataset_name: "cerra"

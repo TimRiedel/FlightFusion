@@ -303,6 +303,10 @@ class TrajectoryProcessor(DatasetProcessor):
         self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
 
         traffic = self._load_traffic(processed_trajectories_path)
+        selected_runways = self.create_training_data_config.get("selected_runways", None)
+        if selected_runways is not None and len(selected_runways) > 0:
+            logger.info(f"    - Filtering trajectories by selected runways {selected_runways}...")
+            traffic, _ = filter_traffic_by_runway(traffic, selected_runways)
 
         logger.info(f"    - Converting to metric units...")
         traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])

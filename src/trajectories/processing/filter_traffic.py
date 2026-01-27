@@ -123,6 +123,32 @@ def filter_traffic_by_type(traffic: Traffic, traffic_type: str) -> Traffic:
     else:
         raise ValueError(f"Invalid traffic type: {traffic_type}")
 
+def filter_traffic_by_runway(traffic: Traffic, selected_runways: list[str] | None = None) -> Traffic:
+    """
+    Filters traffic by selected runways. Keeps only flights that approach one of the selected runways.
+    
+    Parameters
+    -------
+    traffic : Traffic
+        Traffic object to filter. Must contain an 'ILS' column.
+    selected_runways : list[str] | None
+        List of runways to filter by. If None, no filtering is applied.
+    
+    Returns
+    -------
+    Traffic
+        Traffic object containing only flights that approach one of the selected runways (kept_traffic).
+    Traffic
+        Traffic object containing only flights that do not approach one of the selected runways (removed_traffic).
+    """
+    if selected_runways is None or len(selected_runways) == 0:
+        return traffic
+    traffic_df = traffic.data
+    flight_ids = traffic_df[traffic_df["ILS"].isin(selected_runways)]["flight_id"].unique().tolist()
+    # The method returns traffic not in the flight_ids list first
+    removed_traffic, runway_traffic = filter_traffic_by_flight_ids(traffic, flight_ids)
+    return runway_traffic, removed_traffic
+
 def merge_traffic(traffic1: Traffic, traffic2: Traffic) -> Traffic:
     """
     Merges two Traffic objects into a single Traffic object.
