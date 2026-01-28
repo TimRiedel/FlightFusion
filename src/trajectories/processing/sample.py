@@ -1,7 +1,72 @@
+from typing import Any, Iterable
 import pandas as pd
 from traffic.core import Traffic, Flight
 
 from .compute_features import assign_flight_sample_id
+
+def resample_traffic(
+    traffic: Traffic,
+    resampling_rate_seconds: int,
+) -> Traffic:
+    rule = f"{resampling_rate_seconds}s"
+    traffic = Traffic.from_flights([resample_flight(flight, rule) for flight in traffic])
+    traffic = traffic.drop(columns=["track_unwrapped"])
+    return traffic
+
+def resample_flight(
+    flight: Flight,
+    rule: str | int = "1s",
+    how: None | str | dict[str, Iterable[str]] = "interpolate",
+    interpolate_kw: dict[str, Any] = {},
+) -> Flight:
+    """
+    This method was copied from the traffic.core.Flight class and adjusted to use the right label for the resampling
+    and keeping the last point of the flight. This is necessary because the last point in a flight is the runway threshold
+    but resampling it with the default method would discard it.
+    """
+    if isinstance(rule, str):
+        data = (
+            flight
+            .unwrap()
+            .data.set_index("timestamp")
+            .resample(rule, label="right")
+            .last()
+            .reset_index(names="timestamp")
+        )
+
+        data = data.infer_objects(copy=False)
+
+        if how is None:
+            how = {}
+
+        if isinstance(how, str):
+            if how == "interpolate":
+                interpolable = data.select_dtypes(["float", "int"])
+                how = {
+                    "interpolate": set(interpolable),
+                    "ffill": set(
+                        data.select_dtypes(
+                            exclude=["float", "int", "bool", "datetime"]
+                        )
+                    ),
+                }
+            else:
+                how = {how: set(data.columns) - {"timestamp"}}
+
+        for meth, columns in how.items():
+            if meth is not None:
+                idx = data.columns.get_indexer(columns)
+                kwargs = interpolate_kw if meth == "interpolate" else {}
+                value = getattr(data[list(columns)], meth)(**kwargs)
+                data[data.columns[idx]] = value
+
+    if "track_unwrapped" in data.columns:
+        data = data.assign(track=lambda df: df.track_unwrapped % 360)
+    if "heading_unwrapped" in data.columns:
+        data = data.assign(heading=lambda df: df.heading_unwrapped % 360)
+
+    res = Flight(data)
+    return res
 
 def clip_trajectories(traffic: Traffic, trajectory_length_minutes: int) -> Traffic:
     """
@@ -55,7 +120,6 @@ def sample_trajectories(traffic: Traffic, data_period_minutes: int, min_trajecto
         Traffic object containing sampled flights. Each sample is assigned a unique
         flight_id with a sample index suffix (e.g., "flight_id_S1").
     """
-    traffic = traffic.drop(columns=["track_unwrapped"])
     sampled_flights = []
     for flight in traffic:
         flight_duration = flight.duration.components.minutes + 1

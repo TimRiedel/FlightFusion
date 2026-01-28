@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from datetime import datetime
 import warnings
 
@@ -313,7 +314,6 @@ class TrajectoryProcessor(DatasetProcessor):
             logger.info(f"    - Filtering trajectories by selected runways {selected_runways}...")
             traffic, _ = filter_traffic_by_runway(traffic, selected_runways)
 
-
         logger.info(f"    - Converting to metric units...")
         traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])
         traffic = self._convert_to_metric_units(traffic)
@@ -324,7 +324,7 @@ class TrajectoryProcessor(DatasetProcessor):
 
         resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
         logger.info(f"    - Resampling trajectories in {resampling_rate_seconds} seconds intervals...")
-        traffic = traffic.resample(f"{resampling_rate_seconds}s").eval()
+        traffic = resample_traffic(traffic, resampling_rate_seconds=resampling_rate_seconds)
 
         logger.info(f"    - Computing velocity components...")
         traffic = assign_velocity_components(traffic, resampling_rate_seconds=resampling_rate_seconds)
