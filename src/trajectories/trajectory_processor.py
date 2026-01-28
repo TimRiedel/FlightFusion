@@ -302,11 +302,17 @@ class TrajectoryProcessor(DatasetProcessor):
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
 
+        is_sampling_enabled = self.create_training_data_config.get("sampling", {}).get("enabled", True)
+        is_clipping_enabled = self.create_training_data_config.get("clipping", {}).get("enabled", False)
+        if is_sampling_enabled and is_clipping_enabled:
+            raise ValueError("Sampling and clipping cannot be enabled at the same time.")
+
         traffic = self._load_traffic(processed_trajectories_path)
         selected_runways = self.create_training_data_config.get("selected_runways", None)
         if selected_runways is not None and len(selected_runways) > 0:
             logger.info(f"    - Filtering trajectories by selected runways {selected_runways}...")
             traffic, _ = filter_traffic_by_runway(traffic, selected_runways)
+
 
         logger.info(f"    - Converting to metric units...")
         traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])
@@ -315,21 +321,43 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Computing local coordinates...")
         ref_lat, ref_lon = airports[self.icao].latlon
         traffic = assign_local_xy_coordinates(traffic, ref_lat=ref_lat, ref_lon=ref_lon)
-        
-        logger.info(f"    - Computing velocity components...")
-        traffic = assign_velocity_components(traffic, resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
 
-        logger.info(f"    - Sampling trajectories...")
-        self._log_sampling_info()
-        traffic = sample_trajectories(
-            traffic,
-            resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"],
-            data_period_minutes=self.create_training_data_config["data_period_minutes"],
-            min_trajectory_length_minutes=self.create_training_data_config["min_trajectory_length_minutes"],
-        )
+        resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
+        logger.info(f"    - Resampling trajectories in {resampling_rate_seconds} seconds intervals...")
+        traffic = traffic.resample(f"{resampling_rate_seconds}s").eval()
+
+        logger.info(f"    - Computing velocity components...")
+        traffic = assign_velocity_components(traffic, resampling_rate_seconds=resampling_rate_seconds)
+
+        if is_sampling_enabled:
+            data_period_minutes = self.create_training_data_config["sampling"]["data_period_minutes"]
+            logger.info(f"    - Drawing samples from trajectories in {data_period_minutes} minutes intervals...")
+            traffic = sample_trajectories(
+                traffic,
+                data_period_minutes=data_period_minutes,
+                min_trajectory_length_minutes=self.create_training_data_config["sampling"]["min_trajectory_length_minutes"],
+            )
+
+        if is_clipping_enabled:
+            trajectory_length_minutes = self.create_training_data_config["clipping"]["trajectory_length_minutes"]
+            logger.info(f"    - Clipping trajectories to {trajectory_length_minutes} minutes before end...")
+            traffic, removal_reasons = clip_trajectories(
+                traffic,
+                trajectory_length_minutes=trajectory_length_minutes,
+            )
+            self._log_removal_reasons(removal_reasons)
 
         logger.info(f"    - Segmenting input and horizon segments...")
-        input_segments, horizon_segments = get_input_horizon_segments(traffic, input_time_minutes=self.create_training_data_config["input_time_minutes"], horizon_time_minutes=self.create_training_data_config["horizon_time_minutes"], resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
+        input_time_minutes = self.create_training_data_config["input_time_minutes"]
+        horizon_time_minutes = self.create_training_data_config["horizon_time_minutes"]
+        if is_clipping_enabled:
+            horizon_time_minutes = min(horizon_time_minutes, trajectory_length_minutes - input_time_minutes)
+        self._log_segmenting_info(input_time_minutes, horizon_time_minutes, resampling_rate_seconds)
+        input_segments, horizon_segments = get_input_horizon_segments(traffic,
+            input_time_minutes=input_time_minutes,
+            horizon_time_minutes=horizon_time_minutes,
+            resampling_rate_seconds=resampling_rate_seconds
+        )
 
         logger.info(f"    - Saving input segments to {inputs_path}...")
         input_segments.data.to_parquet(inputs_path)
@@ -338,14 +366,11 @@ class TrajectoryProcessor(DatasetProcessor):
 
         logger.info(f"✅ Finished creating training data for {self.icao}.\n")
 
-    def _log_sampling_info(self):
-        input_time_minutes = self.create_training_data_config["input_time_minutes"]
-        horizon_time_minutes = self.create_training_data_config["horizon_time_minutes"]
-        resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
-        num_input_samples = input_time_minutes * 60 // resampling_rate_seconds
-        num_horizon_samples = horizon_time_minutes * 60 // resampling_rate_seconds
-        logger.info(f"        -> Input time: {input_time_minutes} minutes, Horizon: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
-        logger.info(f"        -> Number of input samples: {num_input_samples}, Number of horizon samples: {num_horizon_samples}")
+    def _log_segmenting_info(self, input_time_minutes: int, horizon_time_minutes: int, resampling_rate_seconds: int):
+        num_input_points = input_time_minutes * 60 // resampling_rate_seconds
+        num_horizon_points = horizon_time_minutes * 60 // resampling_rate_seconds
+        logger.info(f"        -> Input time: {input_time_minutes} minutes, Horizon time: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
+        logger.info(f"        -> Number of input points: {num_input_points}, Number of horizon points: {num_horizon_points}")
 
     def _convert_to_metric_units(self, traffic: Traffic) -> Traffic:
         traffic.data["altitude"] = (traffic.data["altitude"] * 0.3048).round(0).astype(int)                    # ft to m

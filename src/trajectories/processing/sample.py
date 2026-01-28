@@ -3,23 +3,45 @@ from traffic.core import Traffic, Flight
 
 from .compute_features import assign_flight_sample_id
 
+def clip_trajectories(traffic: Traffic, trajectory_length_minutes: int) -> Traffic:
+    """
+    Clips trajectories to a specified length.
+    
+    Parameters
+    -------
+    traffic : Traffic
+        Traffic object containing flight trajectories to clip.
+    trajectory_length_minutes : int
+        Length in minutes to clip the trajectories to.
+    
+    Returns
+    -------
+    Traffic
+        Traffic object containing clipped flights.
+    """
+    clipped_flights = []
+    removal_reasons = []
+    for flight in traffic:
+        if flight.duration < pd.Timedelta(minutes=trajectory_length_minutes):
+            removal_reasons.append(f"Flight {flight.flight_id} is too short to clip. Skipping.")
+        else:
+            clipped_flight = flight.last(minutes=trajectory_length_minutes)
+            clipped_flights.append(clipped_flight)
+    return Traffic(pd.concat([flight.data for flight in clipped_flights], ignore_index=True)), removal_reasons
 
-def sample_trajectories(traffic: Traffic, resampling_rate_seconds: int, data_period_minutes: int, min_trajectory_length_minutes: int = 5) -> Traffic:
+
+def sample_trajectories(traffic: Traffic, data_period_minutes: int, min_trajectory_length_minutes: int = 5) -> Traffic:
     """
     Samples trajectories by creating multiple prediction samples from each flight.
     
-    Resamples traffic to a specified rate, then for each flight creates multiple
-    samples by taking segments at regular intervals. Each sample is assigned a
-    unique sample ID (e.g., "flight_id_S1", "flight_id_S2"). Flights shorter than
-    min_trajectory_length_minutes are excluded from sampling.
+    For each flight creates multiple samples by taking segments at regular intervals.
+    Each sample is assigned a unique sample ID (e.g., "flight_id_S1", "flight_id_S2").
+    Flights shorter than min_trajectory_length_minutes are excluded from sampling.
     
     Parameters
     -------
     traffic : Traffic
         Traffic object containing flight trajectories to sample.
-    resampling_rate_seconds : int
-        Resampling rate in seconds. All flights are resampled to this rate before
-        sampling.
     data_period_minutes : int
         Time interval in minutes between consecutive samples. Each sample starts
         data_period_minutes after the previous sample.
@@ -33,7 +55,6 @@ def sample_trajectories(traffic: Traffic, resampling_rate_seconds: int, data_per
         Traffic object containing sampled flights. Each sample is assigned a unique
         flight_id with a sample index suffix (e.g., "flight_id_S1").
     """
-    traffic = traffic.resample(f"{resampling_rate_seconds}s").eval()
     traffic = traffic.drop(columns=["track_unwrapped"])
     sampled_flights = []
     for flight in traffic:

@@ -53,8 +53,13 @@ trajectories:
     resampling_rate_seconds: 30
     input_time_minutes: 5
     horizon_time_minutes: 40
-    data_period_minutes: 5
-    min_trajectory_length_minutes: 8
+    sampling:
+      enabled: false # sampling and clipping cannot be enabled at the same time
+      data_period_minutes: 5
+      min_trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
+    clipping:
+      enabled: true # sampling and clipping cannot be enabled at the same time
+      trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
     selected_runways: ["24L"]
 
 
