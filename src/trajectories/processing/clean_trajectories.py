@@ -156,6 +156,8 @@ def remove_outliers(flight: Flight, attribute: str, threshold: float, window_siz
     
     flight_df = flight.data.copy()
     flight_df = flight_df.sort_values(by='timestamp').reset_index(drop=True)
+    if len(flight_df) < window_size + 1:
+        raise IndexError(f"Flight {flight.flight_id} is too short for window size of outlier removal. Skipping...")
     
     # Use pandas rolling for backward-looking means (excluding current point)
     # shift(1) moves the mean so it represents the mean of previous window_size points
@@ -244,7 +246,9 @@ def remove_lateral_outliers(flight: Flight, window_size: int = 100, deviation_fa
     flight_df = flight.data
     flight_df['distance_to_next'] = pd.to_numeric(flight_df['distance_to_next'], errors='coerce')
     flight_df = flight_df.dropna(subset=['distance_to_next'])
-
+    if len(flight_df) < window_size:
+        raise ValueError(f"Flight {flight.flight_id} is too short for window size of lateral outlier removal. Skipping...")
+    
     flight_df['rolling_mean'] = flight_df['distance_to_next'].rolling(window_size, min_periods=1).mean()
     flight_df['deviation'] = np.abs(flight_df['distance_to_next'] - flight_df['rolling_mean']).fillna(0)
 

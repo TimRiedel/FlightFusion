@@ -143,32 +143,36 @@ class TrajectoryProcessor(DatasetProcessor):
             processed_flight = remove_duplicate_positions(processed_flight)
             
             # Remove altitude outliers
-            alt_outlier_config = clean_config.get("remove_outliers_altitude", {})
-            processed_flight = remove_outliers(
-                processed_flight, 
-                "altitude", 
-                alt_outlier_config.get("threshold", 300),
-                window_size=alt_outlier_config.get("window_size", 20),
-                handle_outliers=alt_outlier_config.get("handle_outliers", "drop")
-            )
-            
-            # Remove groundspeed outliers
-            gs_outlier_config = clean_config.get("remove_outliers_groundspeed", {})
-            processed_flight = remove_outliers(
-                processed_flight, 
-                "groundspeed", 
-                gs_outlier_config.get("threshold", 20),
-                window_size=gs_outlier_config.get("window_size", 10),
-                handle_outliers=gs_outlier_config.get("handle_outliers", "drop")
-            )
-            
-            # Remove lateral outliers
-            lateral_config = clean_config.get("remove_lateral_outliers", {})
-            processed_flight = remove_lateral_outliers(
-                processed_flight,
-                window_size=lateral_config.get("window_size", 100),
-                deviation_factor=lateral_config.get("deviation_factor", 10)
-            )
+            try:
+                alt_outlier_config = clean_config.get("remove_outliers_altitude", {})
+                processed_flight = remove_outliers(
+                    processed_flight, 
+                    "altitude", 
+                    alt_outlier_config.get("threshold", 300),
+                    window_size=alt_outlier_config.get("window_size", 20),
+                    handle_outliers=alt_outlier_config.get("handle_outliers", "drop")
+                )
+                
+                # Remove groundspeed outliers
+                gs_outlier_config = clean_config.get("remove_outliers_groundspeed", {})
+                processed_flight = remove_outliers(
+                    processed_flight, 
+                    "groundspeed", 
+                    gs_outlier_config.get("threshold", 20),
+                    window_size=gs_outlier_config.get("window_size", 10),
+                    handle_outliers=gs_outlier_config.get("handle_outliers", "drop")
+                )
+                
+                # Remove lateral outliers
+                lateral_config = clean_config.get("remove_lateral_outliers", {})
+                processed_flight = remove_lateral_outliers(
+                    processed_flight,
+                    window_size=lateral_config.get("window_size", 100),
+                    deviation_factor=lateral_config.get("deviation_factor", 10)
+                )
+            except IndexError:
+                logger.warning(f"        - Flight {flight.flight_id} is too short for window size of outlier removal. Skipping...")
+                continue
             
             processed_flight = recompute_track(processed_flight)
             processed_flight = remove_nan_values(processed_flight, attribute="altitude")
