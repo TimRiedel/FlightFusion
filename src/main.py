@@ -10,6 +10,7 @@ from weather import MetarProcessor, WeatherProcessor
 
 def log_config(cfg):
     logger.info("==================== Configuration ====================")
+    logger.info(f"Dataset name: {cfg['dataset_name']}")
     logger.info(f"Task: {cfg['task']}")
     logger.info(f"Step: {cfg['step']}")
     logger.info(f"Airports: {cfg['airports']}")
@@ -45,6 +46,7 @@ def main():
 
     for icao in airports:
         processing_config = ProcessingConfig(
+            dataset_name=cfg["dataset_name"],
             icao_code=icao,
             start_dt=start_dt,
             end_dt=end_dt,
