@@ -1,5 +1,9 @@
 import argparse
 from datetime import datetime
+import os
+import shutil
+
+import yaml
 
 from common.dataset_processor import ProcessingConfig
 from trajectories import FlightInfoProcessor, TrajectoryProcessor
@@ -22,6 +26,11 @@ def log_config(cfg):
     logger.info(f"Dataset dir: {cfg['dataset_dir']}")
     logger.info(f"Cache dir: {cfg['cache_dir']}\n")
 
+def save_config(dataset_dir, dataset_name, config_name):
+    output_path = os.path.join(dataset_dir, dataset_name, "config.yaml")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    shutil.copy(f"configs/{config_name}", output_path)
+
 def main():
     parser = argparse.ArgumentParser(description="FlightFusion data pipeline")
     parser.add_argument("--airports", help="One or more airport ICAO codes (e.g. EDDM,EDDL)")
@@ -33,6 +42,7 @@ def main():
 
     args = parser.parse_args()
     cfg = load_config(args.config, args)
+    save_config(cfg["dataset_dir"], cfg["dataset_name"], args.config)
 
     airports = cfg["airports"]
     start_dt = datetime.fromisoformat(cfg["start"])
