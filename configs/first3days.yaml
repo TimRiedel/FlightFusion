@@ -13,6 +13,7 @@ trajectories:
   traffic_type: "arrivals"      # "all", "arrivals", "departures"
   crop_to_circle: true
   drop_attributes: ["alert", "spi", "geoaltitude", "last_position", "lastcontact", "serials", "hour", "onground"]
+  remove_flights_with_recurring_callsings_per_day: true
 
   process:
     filter_traffic_by_airlines:
@@ -43,7 +44,7 @@ trajectories:
       remove_without_runway_alignment:
         enabled: true
         angle_tolerance: 0.1
-        min_alignment_duration_seconds: 90 # this must be adjusted to the airport and most common aircraft types (for some visual approaches, use ~25 seconds, for standard ILS use > 60 - 180 seconds)
+        min_alignment_duration_seconds: 120 # this must be adjusted to the airport and most common aircraft types (for some visual approaches, use ~25 seconds, for standard ILS use > 60 - 180 seconds)
       remove_go_around:
         enabled: true
         track_threshold: 330
@@ -54,11 +55,11 @@ trajectories:
     input_time_minutes: 5
     horizon_time_minutes: 40
     sampling:
-      enabled: false # sampling and clipping cannot be enabled at the same time
+      enabled: true # sampling and clipping cannot be enabled at the same time
       data_period_minutes: 5
       min_trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
     clipping:
-      enabled: true # sampling and clipping cannot be enabled at the same time
+      enabled: false # sampling and clipping cannot be enabled at the same time
       trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
     selected_runways: ["24L"]
 

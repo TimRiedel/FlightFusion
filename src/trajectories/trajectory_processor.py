@@ -20,11 +20,13 @@ warnings.filterwarnings('ignore', message='.*numexpr does not support extension 
 class TrajectoryProcessor(DatasetProcessor):
     def __init__(self, processing_config: ProcessingConfig, task_config: dict):
         super().__init__(processing_config, task_type="trajectories", task_config=task_config, create_temp_dir=True)
-        self.cache = Cache(processing_config.cache_dir, "trajectories", self.icao)
+        self.traj_cache = Cache(processing_config.cache_dir, "trajectories", self.icao)
+        self.flightlist_cache = Cache(processing_config.cache_dir, "flightlist", self.icao)
 
         self.traffic_type = task_config["traffic_type"]
         self.crop_to_circle = task_config["crop_to_circle"]
         self.drop_attributes = task_config.get("drop_attributes", [])
+        self.remove_flights_with_recurring_callsings_per_day = task_config.get("remove_flights_with_recurring_callsings_per_day", True)
         self.process_config = task_config["process"]
         self.create_training_data_config = task_config["create_training_data"]
 
@@ -55,42 +57,69 @@ class TrajectoryProcessor(DatasetProcessor):
     def download_trajectories(self):
         logger.info(f"📡 Downloading trajectories for {self.icao}...")
         all_trajectories_path = self._get_temp_file_path_for(f"trajectories-raw")
-        if os.path.exists(all_trajectories_path):
+        flightlist_path = self._get_temp_file_path_for(f"flightlist")
+        if os.path.exists(all_trajectories_path) and os.path.exists(flightlist_path):
             logger.info(f"    ✓ Found existing trajectories file under {all_trajectories_path}, skipping download.")
+            logger.info(f"    ✓ Found existing flightlist file under {flightlist_path}, skipping download.")
             logger.info(f"✅ Finished downloading trajectories for {self.icao}.\n")
             return
 
         all_traffic_dfs = []
+        flightlist_dfs = []
         for day in self.all_days:
             day_start_dt = day.strftime("%Y-%m-%d 00:00:00")
             day_end_dt = day.strftime("%Y-%m-%d 23:59:59")
             lat, lon = airports[self.icao].latlon
 
-            logger.info(f"    - Downloading trajectories for day {day.strftime('%Y-%m-%d')}.")
+            logger.info(f"    - Downloading day {day.strftime('%Y-%m-%d')}.")
+
+            logger.info(f"        - Downloading trajectories...")
             request_config = self._get_request_config(day_start_dt, day_end_dt)
-            cache_path, exists_cached = self.cache.get_file_path(request_config)
-            if exists_cached:
-                logger.info(f"        ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {cache_path}, skipping download.")
-                traffic = Traffic(self._load_data(cache_path))
+            traj_cache_path, exists_traj_cached = self.traj_cache.get_file_path(request_config)
+            flightlist_cache_path, exists_flightlist_cached = self.flightlist_cache.get_file_path(request_config)
+            if exists_traj_cached:
+                logger.info(f"            ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {traj_cache_path}, skipping download.")
+                traffic = Traffic(self._load_data(traj_cache_path))
             else:
                 traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
-                self._save_data(traffic.data, cache_path)
+                self._save_data(traffic.data, traj_cache_path)
+
+            logger.info(f"        - Downloading flightlist...")
+            if exists_flightlist_cached:
+                logger.info(f"            ✓ Found cached flightlist for day {day.strftime('%Y-%m-%d')} under {flightlist_cache_path}, skipping download.")
+                flightlist = self._load_data(flightlist_cache_path)
+            else:
+                flightlist = download_flightlist(self.icao, day_start_dt, day_end_dt)
+                self._save_data(flightlist, flightlist_cache_path)
 
             traffic = drop_irrelevant_attributes(traffic, self.drop_attributes)
             traffic = assign_flight_id(traffic)
+            logger.info(f"        - Dropping flights with recurring callsigns per day and same departure and arrival airport...")
+            if self.remove_flights_with_recurring_callsings_per_day:
+                traffic, removed_traffic = drop_flights_with_recurring_callsigns_per_day(traffic)
+                for flight in removed_traffic:
+                    logger.info(f"            - Removed flight {flight.flight_id} because it has duplicate flight ids per day.")
+            traffic, removed_traffic = drop_flights_with_same_departure_arrival_airport(traffic, flightlist)
+            for flight in removed_traffic:
+                logger.info(f"            - Removed flight {flight.flight_id} because it has the same departure and arrival airport.")
+
+            logger.info(f"        - Assigning distance to target and cropping to circle (if enabled)...")
             traffic = assign_distance_to_target(traffic, lat, lon)
             if self.crop_to_circle:
                 traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
-            logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to cache {cache_path}.")
             all_traffic_dfs.append(traffic.data)
+            flightlist_dfs.append(flightlist)
 
-        logger.info(f"    - Concatenating trajectories for all days into a single file...")
+        logger.info(f"    - Saving trajectories for all days and saving to {all_trajectories_path}...")
         all_traffic = Traffic(pd.concat(all_traffic_dfs, ignore_index=True))
         self._save_data(all_traffic.data, all_trajectories_path)
-        logger.info(f"        ✓ Saved trajectories for all days to {all_trajectories_path}.")
+        
+        logger.info(f"    - Concatenating flightlist for all days and saving to {flightlist_path}...")
+        total_flightlist = pd.concat(flightlist_dfs, ignore_index=True)
+        self._save_data(total_flightlist, flightlist_path)
 
-        logger.info(f"✅ Finished downloading trajectories for {self.icao}. Saved to {all_trajectories_path}.\n")
+        logger.info(f"✅ Finished downloading trajectories for {self.icao}.\n")
 
 
     # ------------------------------------
@@ -119,9 +148,9 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Cleaning trajectories (removing outliers, duplicates, NaN values)...")
         traffic = self._clean_trajectories(traffic)
 
-        logger.info(f"    - Saving cleaned trajectories...")
+        logger.info(f"    - Saving cleaned trajectories to {cleaned_trajectories_path}...")
         self._save_data(traffic.data, cleaned_trajectories_path)
-        logger.info(f"✅ Finished cleaning trajectories for {self.icao}. Saved to {cleaned_trajectories_path}.\n")
+        logger.info(f"✅ Finished cleaning trajectories for {self.icao}.\n")
     
     def _filter_traffic_by_airlines(self, traffic: Traffic) -> Traffic:
         filter_traffic_by_airlines_config = self.process_config.get("filter_traffic_by_airlines", {})
@@ -203,11 +232,13 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Removing invalid flights...")
         traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
 
-        logger.info(f"    - Saving processed and removed trajectories...")
+        logger.info(f"    - Saving processed trajectories to {processed_trajectories_path}...")
         self._save_data(traffic.data, processed_trajectories_path)
+
         removed_trajectories_path = self._get_temp_file_path_for("trajectories-processed-removed-flights")
+        logger.info(f"    - Saving removed trajectories to {removed_trajectories_path}...")
         self._save_data(invalid_traffic.data, removed_trajectories_path)
-        logger.info(f"✅ Finished processing trajectories for {self.icao}. Saved\n    - Valid trajectories to {processed_trajectories_path}.\n    - Removed trajectories to {removed_trajectories_path}.\n")
+        logger.info(f"✅ Finished processing trajectories for {self.icao}.\n")
 
 
     def _remove_invalid_flights(self, processed_traffic: Traffic, icao: str) -> tuple[Traffic, Traffic]:

@@ -1,13 +1,13 @@
 defaults:
   airports: ["EDDB"]
-  start: "2024-10-20T00:00:00"
-  end: "2024-10-20T23:59:59"
+  start: "2024-01-01T00:00"
+  end: "2024-12-31T23:59"
+  days_of_month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
   radius_km: 300
-  dataset_dir: "../assets/datasets"
-  cache_dir: ".cache"
+  dataset_dir: "/sc/projects/sci-naumann/chair/tim.riedel/FlightFusion/datasets"
+  cache_dir: "/sc/projects/sci-naumann/chair/tim.riedel/FlightFusion/.cache"
   task: "all"
   step: "all"
-
 
 trajectories:
   traffic_type: "arrivals"      # "all", "arrivals", "departures"
@@ -44,7 +44,7 @@ trajectories:
       remove_without_runway_alignment:
         enabled: true
         angle_tolerance: 0.1
-        min_alignment_duration_seconds: 120 # this must be adjusted to the airport and most common aircraft types (for many visual approaches, use ~25 seconds, for standard ILS use > 40-60 seconds)
+        min_alignment_duration_seconds: 120 # this must be adjusted to the airport and most common aircraft types (for some visual approaches, use ~25 seconds, for standard ILS use > 60 - 180 seconds)
       remove_go_around:
         enabled: true
         track_threshold: 330
@@ -63,12 +63,9 @@ trajectories:
       trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
     selected_runways: ["24L"]
 
-
 weather:
   dataset_name: "cerra"
   variables: ["temperature", "u_component_of_wind", "v_component_of_wind"]
   pressure_levels: [975, 900, 800, 600, 400, 200]
   grid_num_x: 64
   grid_num_y: 64
-
-
