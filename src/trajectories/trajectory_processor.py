@@ -94,14 +94,16 @@ class TrajectoryProcessor(DatasetProcessor):
 
             traffic = drop_irrelevant_attributes(traffic, self.drop_attributes)
             traffic = assign_flight_id(traffic)
+
             logger.info(f"        - Dropping flights with recurring callsigns per day and same departure and arrival airport...")
             if self.remove_flights_with_recurring_callsings_per_day:
                 traffic, removed_traffic = drop_flights_with_recurring_callsigns_per_day(traffic)
                 for flight in removed_traffic:
                     logger.info(f"            - Removed flight {flight.flight_id} because it has duplicate flight ids per day.")
-            traffic, removed_traffic = drop_flights_with_same_departure_arrival_airport(traffic, flightlist)
-            for flight in removed_traffic:
-                logger.info(f"            - Removed flight {flight.flight_id} because it has the same departure and arrival airport.")
+
+            traffic, removed_traffic, removal_reasons = drop_flights_with_same_departure_arrival_airport(traffic, flightlist)
+            for reason in removal_reasons:
+                logger.info(f"            - {reason}")
 
             logger.info(f"        - Assigning distance to target and cropping to circle (if enabled)...")
             traffic = assign_distance_to_target(traffic, lat, lon)

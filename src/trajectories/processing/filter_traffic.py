@@ -149,7 +149,7 @@ def filter_traffic_by_runway(traffic: Traffic, selected_runways: list[str] | Non
     removed_traffic, runway_traffic = filter_traffic_by_flight_ids(traffic, flight_ids)
     return runway_traffic, removed_traffic
 
-def drop_flights_with_same_departure_arrival_airport(traffic: Traffic, flightlist: pd.DataFrame) -> Traffic:
+def drop_flights_with_same_departure_arrival_airport(traffic: Traffic, flightlist: pd.DataFrame) -> tuple[Traffic, Traffic, list[str]]:
     """
     Removes flights with the same arrival and departure airport.
     
@@ -162,12 +162,14 @@ def drop_flights_with_same_departure_arrival_airport(traffic: Traffic, flightlis
     
     Returns
     -------
-    Traffic
-        Traffic object containing flights with different arrival and departure airport.
-    Traffic
-        Traffic object containing flights with the same arrival and departure airport.
+    tuple[Traffic, Traffic, list[str]]
+        Tuple containing:
+        - valid_traffic: Traffic object containing flights with different arrival and departure airport.
+        - removed_traffic: Traffic object containing flights with the same arrival and departure airport.
+        - removal_reasons: List of reasons why each flight was removed.
     """
     removed_flight_ids = []
+    removal_reasons = []
     for flight in list(traffic):
 
         matches = flightlist
@@ -182,15 +184,25 @@ def drop_flights_with_same_departure_arrival_airport(traffic: Traffic, flightlis
         ]
 
         if len(matches) > 1:
-            raise ValueError(f"Flight {flight.flight_id} has multiple matches in the flightlist.")
+            removal_reasons.append(f"Flight {flight.flight_id} has multiple matches in the flightlist.")
+            removed_flight_ids.append(flight.flight_id)
+            continue
+
         if len(matches) == 0:
-            raise ValueError(f"Flight {flight.flight_id} does not have a match in the flightlist.")
+            if flight.stop.hour == 23 and flight.stop.minute == 59 and flight.stop.second == 59:
+                removal_reasons.append(f"Flight {flight.flight_id} crosses the day boundary and does not have a match in the flightlist.")
+            else:
+                removal_reasons.append(f"Flight {flight.flight_id} does not have a match in the flightlist.")
+            removed_flight_ids.append(flight.flight_id)
+            continue
+
         match = matches.iloc[0]
         if pd.notna(match['departure']) and pd.notna(match['arrival']) and match['departure'] == match['arrival']:
+            removal_reasons.append(f"Flight {flight.flight_id} has the same arrival and departure airport.")
             removed_flight_ids.append(flight.flight_id)
 
     traffic, removed_traffic = filter_traffic_by_flight_ids(traffic, removed_flight_ids)
-    return traffic, removed_traffic
+    return traffic, removed_traffic, removal_reasons
 
 def drop_flights_with_recurring_callsigns_per_day(traffic: Traffic) -> tuple[Traffic, Traffic]:
     """
