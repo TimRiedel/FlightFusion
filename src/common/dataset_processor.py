@@ -10,6 +10,7 @@ from utils.logger import logger
 @dataclass
 class ProcessingConfig:
     """Configuration object for data processing tasks."""
+    dataset_name: str
     icao_code: str
     start_dt: datetime
     end_dt: datetime
@@ -21,6 +22,7 @@ class ProcessingConfig:
 
 class DatasetProcessor:
     def __init__(self, processing_config: ProcessingConfig, task_type: str, task_config: dict = {}, create_temp_dir: bool = True):
+        self.dataset_name = processing_config.dataset_name
         self.icao = processing_config.icao_code.upper()
         self.start_dt = pd.to_datetime(processing_config.start_dt).tz_localize("UTC") # enforce UTC timezone
         self.end_dt = pd.to_datetime(processing_config.end_dt).tz_localize("UTC")
@@ -30,7 +32,7 @@ class DatasetProcessor:
         lat, lon = airports[self.icao].latlon
         self.airport_circle = get_circle_around_location(lat, lon, self.radius_m)
 
-        self.output_dir = os.path.join(processing_config.dataset_dir, self.icao, task_type)
+        self.output_dir = os.path.join(processing_config.dataset_dir, self.dataset_name, task_type)
         os.makedirs(self.output_dir, exist_ok=True)
         
         # Create .temp directory for intermediate files

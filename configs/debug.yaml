@@ -1,0 +1,75 @@
+defaults:
+  dataset_name: "EDDB-single-day"
+  airports: ["EDDB"]
+  start: "2024-10-20T00:00:00"
+  end: "2024-10-20T23:59:59"
+  radius_km: 300
+  dataset_dir: "../assets/datasets"
+  cache_dir: ".cache"
+  task: "all"
+  step: "all"
+
+
+trajectories:
+  traffic_type: "arrivals"      # "all", "arrivals", "departures"
+  crop_to_circle: true
+  drop_attributes: ["alert", "spi", "geoaltitude", "last_position", "lastcontact", "serials", "hour", "onground"]
+  remove_flights_with_recurring_callsings_per_day: true
+
+  process:
+    filter_traffic_by_airlines:
+      enabled: true
+      excluded_callsigns: ["CHX", "GAF", "BPO", "FCK", "AMB", "DCA", "PBW", "HUM", "DIL"]
+      top_n_airlines: 100 # If None, no filtering is applied.
+
+    clean: # Cleaning steps
+      remove_outliers_altitude:
+        threshold: 300
+        window_size: 20
+        handle_outliers: "drop"  # "drop" or "interpolate"
+      remove_outliers_groundspeed:
+        threshold: 20
+        window_size: 10
+        handle_outliers: "drop"  # "drop" or "interpolate"
+      remove_lateral_outliers:
+        window_size: 100
+        deviation_factor: 10
+
+    remove_flights: # Flight removal steps
+      remove_small_duration:
+        enabled: true
+        threshold_seconds: 60
+      remove_non_continuous:
+        enabled: true
+        continuity_threshold_seconds: 120
+      remove_without_runway_alignment:
+        enabled: true
+        angle_tolerance: 0.1
+        min_alignment_duration_seconds: 120 # this must be adjusted to the airport and most common aircraft types (for many visual approaches, use ~25 seconds, for standard ILS use > 40-60 seconds)
+      remove_go_around:
+        enabled: true
+        track_threshold: 330
+        time_window_seconds: 500
+
+  create_training_data:
+    resampling_rate_seconds: 30
+    input_time_minutes: 5
+    horizon_time_minutes: 40
+    sampling:
+      enabled: true # sampling and clipping cannot be enabled at the same time
+      data_period_minutes: 5
+      min_trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
+    clipping:
+      enabled: false # sampling and clipping cannot be enabled at the same time
+      trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
+    selected_runways: ["24L"]
+
+
+weather:
+  dataset_name: "cerra"
+  variables: ["temperature", "u_component_of_wind", "v_component_of_wind"]
+  pressure_levels: [975, 900, 800, 600, 400, 200]
+  grid_num_x: 64
+  grid_num_y: 64
+
+

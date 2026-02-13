@@ -13,9 +13,9 @@ class Cache:
             data_type: Type of data being cached ("weather", "metar", or "trajectories")
             icao: ICAO code (required for "metar" and "trajectories" data types)
         """
-        if data_type not in ["weather", "metar", "trajectories"]:
+        if data_type not in ["weather", "metar", "trajectories", "flightlist"]:
             raise ValueError(f"Invalid data type for cache: {data_type}")
-        if data_type in ["metar", "trajectories"] and icao is None:
+        if data_type in ["metar", "trajectories", "flightlist"] and icao is None:
             raise ValueError(f"ICAO code is required for {data_type} cache")
 
         self.cache_dir = os.path.join(cache_dir, data_type)
@@ -53,6 +53,9 @@ class Cache:
         elif self.data_type == "trajectories":
             file_path = self._get_trajectories_file_path(request_config, hash_val)
             exists = os.path.exists(file_path)
+        elif self.data_type == "flightlist":
+            file_path = self._get_flightlist_file_path(request_config, hash_val)
+            exists = os.path.exists(file_path)
         return file_path, exists
 
     def _get_weather_file_path(self, request_config: dict, hash_val: str):
@@ -66,3 +69,6 @@ class Cache:
 
     def _get_trajectories_file_path(self, request_config: dict, hash_val: str):
         return os.path.join(self.cache_dir, f"{self.icao}_trajectories_{hash_val}.parquet")
+
+    def _get_flightlist_file_path(self, request_config: dict, hash_val: str):
+        return os.path.join(self.cache_dir, f"{self.icao}_flightlist_{hash_val}.parquet")

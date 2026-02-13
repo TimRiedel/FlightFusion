@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from datetime import datetime
 import warnings
 
@@ -19,11 +20,13 @@ warnings.filterwarnings('ignore', message='.*numexpr does not support extension 
 class TrajectoryProcessor(DatasetProcessor):
     def __init__(self, processing_config: ProcessingConfig, task_config: dict):
         super().__init__(processing_config, task_type="trajectories", task_config=task_config, create_temp_dir=True)
-        self.cache = Cache(processing_config.cache_dir, "trajectories", self.icao)
+        self.traj_cache = Cache(processing_config.cache_dir, "trajectories", self.icao)
+        self.flightlist_cache = Cache(processing_config.cache_dir, "flightlist", self.icao)
 
         self.traffic_type = task_config["traffic_type"]
         self.crop_to_circle = task_config["crop_to_circle"]
         self.drop_attributes = task_config.get("drop_attributes", [])
+        self.remove_flights_with_recurring_callsings_per_day = task_config.get("remove_flights_with_recurring_callsings_per_day", True)
         self.process_config = task_config["process"]
         self.create_training_data_config = task_config["create_training_data"]
 
@@ -54,42 +57,71 @@ class TrajectoryProcessor(DatasetProcessor):
     def download_trajectories(self):
         logger.info(f"📡 Downloading trajectories for {self.icao}...")
         all_trajectories_path = self._get_temp_file_path_for(f"trajectories-raw")
-        if os.path.exists(all_trajectories_path):
+        flightlist_path = self._get_temp_file_path_for(f"flightlist")
+        if os.path.exists(all_trajectories_path) and os.path.exists(flightlist_path):
             logger.info(f"    ✓ Found existing trajectories file under {all_trajectories_path}, skipping download.")
+            logger.info(f"    ✓ Found existing flightlist file under {flightlist_path}, skipping download.")
             logger.info(f"✅ Finished downloading trajectories for {self.icao}.\n")
             return
 
         all_traffic_dfs = []
+        flightlist_dfs = []
         for day in self.all_days:
             day_start_dt = day.strftime("%Y-%m-%d 00:00:00")
             day_end_dt = day.strftime("%Y-%m-%d 23:59:59")
             lat, lon = airports[self.icao].latlon
 
-            logger.info(f"    - Downloading trajectories for day {day.strftime('%Y-%m-%d')}.")
+            logger.info(f"    - Downloading day {day.strftime('%Y-%m-%d')}.")
+
+            logger.info(f"        - Downloading trajectories...")
             request_config = self._get_request_config(day_start_dt, day_end_dt)
-            cache_path, exists_cached = self.cache.get_file_path(request_config)
-            if exists_cached:
-                logger.info(f"        ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {cache_path}, skipping download.")
-                traffic = Traffic(self._load_data(cache_path))
+            traj_cache_path, exists_traj_cached = self.traj_cache.get_file_path(request_config)
+            flightlist_cache_path, exists_flightlist_cached = self.flightlist_cache.get_file_path(request_config)
+            if exists_traj_cached:
+                logger.info(f"            ✓ Found cached trajectories for day {day.strftime('%Y-%m-%d')} under {traj_cache_path}, skipping download.")
+                traffic = Traffic(self._load_data(traj_cache_path))
             else:
                 traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
-                self._save_data(traffic.data, cache_path)
+                self._save_data(traffic.data, traj_cache_path)
+
+            logger.info(f"        - Downloading flightlist...")
+            if exists_flightlist_cached:
+                logger.info(f"            ✓ Found cached flightlist for day {day.strftime('%Y-%m-%d')} under {flightlist_cache_path}, skipping download.")
+                flightlist = self._load_data(flightlist_cache_path)
+            else:
+                flightlist = download_flightlist(self.icao, day_start_dt, day_end_dt)
+                self._save_data(flightlist, flightlist_cache_path)
 
             traffic = drop_irrelevant_attributes(traffic, self.drop_attributes)
             traffic = assign_flight_id(traffic)
+
+            logger.info(f"        - Dropping flights with recurring callsigns per day and same departure and arrival airport...")
+            if self.remove_flights_with_recurring_callsings_per_day:
+                traffic, removed_traffic = drop_flights_with_recurring_callsigns_per_day(traffic)
+                for flight in removed_traffic:
+                    logger.info(f"            - Removed flight {flight.flight_id} because it has duplicate flight ids per day.")
+
+            traffic, removed_traffic, removal_reasons = drop_flights_with_same_departure_arrival_airport(traffic, flightlist)
+            for reason in removal_reasons:
+                logger.info(f"            - {reason}")
+
+            logger.info(f"        - Assigning distance to target and cropping to circle (if enabled)...")
             traffic = assign_distance_to_target(traffic, lat, lon)
             if self.crop_to_circle:
                 traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
-            logger.info(f"        ✓ Saved trajectories for day {day.strftime('%Y-%m-%d')} to cache {cache_path}.")
             all_traffic_dfs.append(traffic.data)
+            flightlist_dfs.append(flightlist)
 
-        logger.info(f"    - Concatenating trajectories for all days into a single file...")
+        logger.info(f"    - Saving trajectories for all days and saving to {all_trajectories_path}...")
         all_traffic = Traffic(pd.concat(all_traffic_dfs, ignore_index=True))
         self._save_data(all_traffic.data, all_trajectories_path)
-        logger.info(f"        ✓ Saved trajectories for all days to {all_trajectories_path}.")
+        
+        logger.info(f"    - Concatenating flightlist for all days and saving to {flightlist_path}...")
+        total_flightlist = pd.concat(flightlist_dfs, ignore_index=True)
+        self._save_data(total_flightlist, flightlist_path)
 
-        logger.info(f"✅ Finished downloading trajectories for {self.icao}. Saved to {all_trajectories_path}.\n")
+        logger.info(f"✅ Finished downloading trajectories for {self.icao}.\n")
 
 
     # ------------------------------------
@@ -118,9 +150,9 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Cleaning trajectories (removing outliers, duplicates, NaN values)...")
         traffic = self._clean_trajectories(traffic)
 
-        logger.info(f"    - Saving cleaned trajectories...")
+        logger.info(f"    - Saving cleaned trajectories to {cleaned_trajectories_path}...")
         self._save_data(traffic.data, cleaned_trajectories_path)
-        logger.info(f"✅ Finished cleaning trajectories for {self.icao}. Saved to {cleaned_trajectories_path}.\n")
+        logger.info(f"✅ Finished cleaning trajectories for {self.icao}.\n")
     
     def _filter_traffic_by_airlines(self, traffic: Traffic) -> Traffic:
         filter_traffic_by_airlines_config = self.process_config.get("filter_traffic_by_airlines", {})
@@ -142,32 +174,36 @@ class TrajectoryProcessor(DatasetProcessor):
             processed_flight = remove_duplicate_positions(processed_flight)
             
             # Remove altitude outliers
-            alt_outlier_config = clean_config.get("remove_outliers_altitude", {})
-            processed_flight = remove_outliers(
-                processed_flight, 
-                "altitude", 
-                alt_outlier_config.get("threshold", 300),
-                window_size=alt_outlier_config.get("window_size", 20),
-                handle_outliers=alt_outlier_config.get("handle_outliers", "drop")
-            )
-            
-            # Remove groundspeed outliers
-            gs_outlier_config = clean_config.get("remove_outliers_groundspeed", {})
-            processed_flight = remove_outliers(
-                processed_flight, 
-                "groundspeed", 
-                gs_outlier_config.get("threshold", 20),
-                window_size=gs_outlier_config.get("window_size", 10),
-                handle_outliers=gs_outlier_config.get("handle_outliers", "drop")
-            )
-            
-            # Remove lateral outliers
-            lateral_config = clean_config.get("remove_lateral_outliers", {})
-            processed_flight = remove_lateral_outliers(
-                processed_flight,
-                window_size=lateral_config.get("window_size", 100),
-                deviation_factor=lateral_config.get("deviation_factor", 10)
-            )
+            try:
+                alt_outlier_config = clean_config.get("remove_outliers_altitude", {})
+                processed_flight = remove_outliers(
+                    processed_flight, 
+                    "altitude", 
+                    alt_outlier_config.get("threshold", 300),
+                    window_size=alt_outlier_config.get("window_size", 20),
+                    handle_outliers=alt_outlier_config.get("handle_outliers", "drop")
+                )
+                
+                # Remove groundspeed outliers
+                gs_outlier_config = clean_config.get("remove_outliers_groundspeed", {})
+                processed_flight = remove_outliers(
+                    processed_flight, 
+                    "groundspeed", 
+                    gs_outlier_config.get("threshold", 20),
+                    window_size=gs_outlier_config.get("window_size", 10),
+                    handle_outliers=gs_outlier_config.get("handle_outliers", "drop")
+                )
+                
+                # Remove lateral outliers
+                lateral_config = clean_config.get("remove_lateral_outliers", {})
+                processed_flight = remove_lateral_outliers(
+                    processed_flight,
+                    window_size=lateral_config.get("window_size", 100),
+                    deviation_factor=lateral_config.get("deviation_factor", 10)
+                )
+            except IndexError:
+                logger.warning(f"        - Flight {flight.flight_id} is too short for window size of outlier removal. Skipping...")
+                continue
             
             processed_flight = recompute_track(processed_flight)
             processed_flight = remove_nan_values(processed_flight, attribute="altitude")
@@ -198,11 +234,13 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Removing invalid flights...")
         traffic, invalid_traffic = self._remove_invalid_flights(traffic, self.icao)
 
-        logger.info(f"    - Saving processed and removed trajectories...")
+        logger.info(f"    - Saving processed trajectories to {processed_trajectories_path}...")
         self._save_data(traffic.data, processed_trajectories_path)
+
         removed_trajectories_path = self._get_temp_file_path_for("trajectories-processed-removed-flights")
+        logger.info(f"    - Saving removed trajectories to {removed_trajectories_path}...")
         self._save_data(invalid_traffic.data, removed_trajectories_path)
-        logger.info(f"✅ Finished processing trajectories for {self.icao}. Saved\n    - Valid trajectories to {processed_trajectories_path}.\n    - Removed trajectories to {removed_trajectories_path}.\n")
+        logger.info(f"✅ Finished processing trajectories for {self.icao}.\n")
 
 
     def _remove_invalid_flights(self, processed_traffic: Traffic, icao: str) -> tuple[Traffic, Traffic]:
@@ -302,7 +340,16 @@ class TrajectoryProcessor(DatasetProcessor):
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
 
+        is_sampling_enabled = self.create_training_data_config.get("sampling", {}).get("enabled", True)
+        is_clipping_enabled = self.create_training_data_config.get("clipping", {}).get("enabled", False)
+        if is_sampling_enabled and is_clipping_enabled:
+            raise ValueError("Sampling and clipping cannot be enabled at the same time.")
+
         traffic = self._load_traffic(processed_trajectories_path)
+        selected_runways = self.create_training_data_config.get("selected_runways", None)
+        if selected_runways is not None and len(selected_runways) > 0:
+            logger.info(f"    - Filtering trajectories by selected runways {selected_runways}...")
+            traffic, _ = filter_traffic_by_runway(traffic, selected_runways)
 
         logger.info(f"    - Converting to metric units...")
         traffic = traffic.query("is_arrival == True").drop(columns=["is_arrival"])
@@ -311,21 +358,43 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Computing local coordinates...")
         ref_lat, ref_lon = airports[self.icao].latlon
         traffic = assign_local_xy_coordinates(traffic, ref_lat=ref_lat, ref_lon=ref_lon)
-        
-        logger.info(f"    - Computing velocity components...")
-        traffic = assign_velocity_components(traffic, resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
 
-        logger.info(f"    - Sampling trajectories...")
-        self._log_sampling_info()
-        traffic = sample_trajectories(
-            traffic,
-            resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"],
-            data_period_minutes=self.create_training_data_config["data_period_minutes"],
-            min_trajectory_length_minutes=self.create_training_data_config["min_trajectory_length_minutes"],
-        )
+        resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
+        logger.info(f"    - Resampling trajectories in {resampling_rate_seconds} seconds intervals...")
+        traffic = resample_traffic(traffic, resampling_rate_seconds=resampling_rate_seconds)
+
+        logger.info(f"    - Computing velocity components...")
+        traffic = assign_velocity_components(traffic, resampling_rate_seconds=resampling_rate_seconds)
+
+        if is_sampling_enabled:
+            data_period_minutes = self.create_training_data_config["sampling"]["data_period_minutes"]
+            logger.info(f"    - Drawing samples from trajectories in {data_period_minutes} minutes intervals...")
+            traffic = sample_trajectories(
+                traffic,
+                data_period_minutes=data_period_minutes,
+                min_trajectory_length_minutes=self.create_training_data_config["sampling"]["min_trajectory_length_minutes"],
+            )
+
+        if is_clipping_enabled:
+            trajectory_length_minutes = self.create_training_data_config["clipping"]["trajectory_length_minutes"]
+            logger.info(f"    - Clipping trajectories to {trajectory_length_minutes} minutes before end...")
+            traffic, removal_reasons = clip_trajectories(
+                traffic,
+                trajectory_length_minutes=trajectory_length_minutes,
+            )
+            self._log_removal_reasons(removal_reasons)
 
         logger.info(f"    - Segmenting input and horizon segments...")
-        input_segments, horizon_segments = get_input_horizon_segments(traffic, input_time_minutes=self.create_training_data_config["input_time_minutes"], horizon_time_minutes=self.create_training_data_config["horizon_time_minutes"], resampling_rate_seconds=self.create_training_data_config["resampling_rate_seconds"])
+        input_time_minutes = self.create_training_data_config["input_time_minutes"]
+        horizon_time_minutes = self.create_training_data_config["horizon_time_minutes"]
+        if is_clipping_enabled:
+            horizon_time_minutes = min(horizon_time_minutes, trajectory_length_minutes - input_time_minutes)
+        self._log_segmenting_info(input_time_minutes, horizon_time_minutes, resampling_rate_seconds)
+        input_segments, horizon_segments = get_input_horizon_segments(traffic,
+            input_time_minutes=input_time_minutes,
+            horizon_time_minutes=horizon_time_minutes,
+            resampling_rate_seconds=resampling_rate_seconds
+        )
 
         logger.info(f"    - Saving input segments to {inputs_path}...")
         input_segments.data.to_parquet(inputs_path)
@@ -334,14 +403,11 @@ class TrajectoryProcessor(DatasetProcessor):
 
         logger.info(f"✅ Finished creating training data for {self.icao}.\n")
 
-    def _log_sampling_info(self):
-        input_time_minutes = self.create_training_data_config["input_time_minutes"]
-        horizon_time_minutes = self.create_training_data_config["horizon_time_minutes"]
-        resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
-        num_input_samples = input_time_minutes * 60 // resampling_rate_seconds
-        num_horizon_samples = horizon_time_minutes * 60 // resampling_rate_seconds
-        logger.info(f"        -> Input time: {input_time_minutes} minutes, Horizon: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
-        logger.info(f"        -> Number of input samples: {num_input_samples}, Number of horizon samples: {num_horizon_samples}")
+    def _log_segmenting_info(self, input_time_minutes: int, horizon_time_minutes: int, resampling_rate_seconds: int):
+        num_input_points = input_time_minutes * 60 // resampling_rate_seconds
+        num_horizon_points = horizon_time_minutes * 60 // resampling_rate_seconds
+        logger.info(f"        -> Input time: {input_time_minutes} minutes, Horizon time: {horizon_time_minutes} minutes, Resampling rate: {resampling_rate_seconds} seconds")
+        logger.info(f"        -> Number of input points: {num_input_points}, Number of horizon points: {num_horizon_points}")
 
     def _convert_to_metric_units(self, traffic: Traffic) -> Traffic:
         traffic.data["altitude"] = (traffic.data["altitude"] * 0.3048).round(0).astype(int)                    # ft to m

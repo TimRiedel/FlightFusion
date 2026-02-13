@@ -1,5 +1,9 @@
 import argparse
 from datetime import datetime
+import os
+import shutil
+
+import yaml
 
 from common.dataset_processor import ProcessingConfig
 from trajectories import FlightInfoProcessor, TrajectoryProcessor
@@ -10,6 +14,7 @@ from weather import MetarProcessor, WeatherProcessor
 
 def log_config(cfg):
     logger.info("==================== Configuration ====================")
+    logger.info(f"Dataset name: {cfg['dataset_name']}")
     logger.info(f"Task: {cfg['task']}")
     logger.info(f"Step: {cfg['step']}")
     logger.info(f"Airports: {cfg['airports']}")
@@ -21,6 +26,11 @@ def log_config(cfg):
     logger.info(f"Dataset dir: {cfg['dataset_dir']}")
     logger.info(f"Cache dir: {cfg['cache_dir']}\n")
 
+def save_config(dataset_dir, dataset_name, config_name):
+    output_path = os.path.join(dataset_dir, dataset_name, "config.yaml")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    shutil.copy(f"configs/{config_name}", output_path)
+
 def main():
     parser = argparse.ArgumentParser(description="FlightFusion data pipeline")
     parser.add_argument("--airports", help="One or more airport ICAO codes (e.g. EDDM,EDDL)")
@@ -28,10 +38,11 @@ def main():
     parser.add_argument("--end", type=str, help="End date/time (YYYY-MM-DDTHH:MM)")
     parser.add_argument("--task", choices=ALL_TASKS, default="all", help="Task to execute in the pipeline.")
     parser.add_argument("--step", choices=ALL_STEPS, default="all", help=f"Which step to execute from the specified task. Step 'all' is available for every task. For task 'flights': {', '.join(TASK_STEPS['trajectories'])}. For task 'metar': {', '.join(TASK_STEPS['metar'])}. For task 'weather': {', '.join(TASK_STEPS['weather'])}.")
-    parser.add_argument("--config", default="debug_config.yaml", help="Path to config file")
+    parser.add_argument("--config", default="debug.yaml", help="Path to config file")
 
     args = parser.parse_args()
     cfg = load_config(args.config, args)
+    save_config(cfg["dataset_dir"], cfg["dataset_name"], args.config)
 
     airports = cfg["airports"]
     start_dt = datetime.fromisoformat(cfg["start"])
@@ -45,6 +56,7 @@ def main():
 
     for icao in airports:
         processing_config = ProcessingConfig(
+            dataset_name=cfg["dataset_name"],
             icao_code=icao,
             start_dt=start_dt,
             end_dt=end_dt,
