@@ -340,6 +340,7 @@ class TrajectoryProcessor(DatasetProcessor):
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
 
+        is_segmenting_enabled = self.create_training_data_config.get("segmenting", {}).get("enabled", True)
         is_sampling_enabled = self.create_training_data_config.get("sampling", {}).get("enabled", True)
         is_clipping_enabled = self.create_training_data_config.get("clipping", {}).get("enabled", False)
         if is_sampling_enabled and is_clipping_enabled:
@@ -384,22 +385,29 @@ class TrajectoryProcessor(DatasetProcessor):
             )
             self._log_removal_reasons(removal_reasons)
 
-        logger.info(f"    - Segmenting input and horizon segments...")
-        input_time_minutes = self.create_training_data_config["input_time_minutes"]
-        horizon_time_minutes = self.create_training_data_config["horizon_time_minutes"]
-        if is_clipping_enabled:
-            horizon_time_minutes = min(horizon_time_minutes, trajectory_length_minutes - input_time_minutes)
-        self._log_segmenting_info(input_time_minutes, horizon_time_minutes, resampling_rate_seconds)
-        input_segments, horizon_segments = get_input_horizon_segments(traffic,
-            input_time_minutes=input_time_minutes,
-            horizon_time_minutes=horizon_time_minutes,
-            resampling_rate_seconds=resampling_rate_seconds
-        )
 
-        logger.info(f"    - Saving input segments to {inputs_path}...")
-        input_segments.data.to_parquet(inputs_path)
-        logger.info(f"    - Saving horizon segments to {horizons_path}.")
-        horizon_segments.data.to_parquet(horizons_path)
+        if is_segmenting_enabled:
+            logger.info(f"    - Segmenting input and horizon segments...")
+            input_time_minutes = self.create_training_data_config["segmenting"]["input_time_minutes"]
+            horizon_time_minutes = self.create_training_data_config["segmenting"]["horizon_time_minutes"]
+            if is_clipping_enabled:
+                horizon_time_minutes = min(horizon_time_minutes, trajectory_length_minutes - input_time_minutes)
+            self._log_segmenting_info(input_time_minutes, horizon_time_minutes, resampling_rate_seconds)
+            input_segments, horizon_segments = get_input_horizon_segments(traffic,
+                input_time_minutes=input_time_minutes,
+                horizon_time_minutes=horizon_time_minutes,
+                resampling_rate_seconds=resampling_rate_seconds
+            )
+
+            logger.info(f"    - Saving input segments to {inputs_path}...")
+            input_segments.data.to_parquet(inputs_path)
+            logger.info(f"    - Saving horizon segments to {horizons_path}.")
+            horizon_segments.data.to_parquet(horizons_path)
+
+        # Always save resampled trajectories
+        resampled_path = self._get_output_file_path_for("trajectories-resampled")
+        logger.info(f"    - Saving resampled trajectories to {resampled_path}...")
+        traffic.data.to_parquet(resampled_path)
 
         logger.info(f"✅ Finished creating training data for {self.icao}.\n")
 

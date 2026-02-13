@@ -53,8 +53,7 @@ trajectories:
 
   create_training_data:
     resampling_rate_seconds: 30
-    input_time_minutes: 5
-    horizon_time_minutes: 40
+    selected_runways: null
     sampling:
       enabled: true # sampling and clipping cannot be enabled at the same time
       data_period_minutes: 5
@@ -62,7 +61,10 @@ trajectories:
     clipping:
       enabled: false # sampling and clipping cannot be enabled at the same time
       trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
-    selected_runways: ["24L"]
+    segmenting:
+      enabled: true
+      input_time_minutes: 5
+      horizon_time_minutes: 40
 
 weather:
   dataset_name: "cerra"

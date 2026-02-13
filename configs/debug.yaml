@@ -1,8 +1,8 @@
 defaults:
   dataset_name: "EDDB-single-day"
   airports: ["EDDB"]
-  start: "2024-10-20T00:00:00"
-  end: "2024-10-20T23:59:59"
+  start: "2024-01-01T00:00:00"
+  end: "2024-01-01T23:59:59"
   radius_km: 300
   dataset_dir: "../assets/datasets"
   cache_dir: ".cache"
@@ -53,8 +53,7 @@ trajectories:
 
   create_training_data:
     resampling_rate_seconds: 30
-    input_time_minutes: 5
-    horizon_time_minutes: 40
+    selected_runways: null
     sampling:
       enabled: true # sampling and clipping cannot be enabled at the same time
       data_period_minutes: 5
@@ -62,7 +61,10 @@ trajectories:
     clipping:
       enabled: false # sampling and clipping cannot be enabled at the same time
       trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
-    selected_runways: ["24L"]
+    segmenting:
+      enabled: true
+      input_time_minutes: 5
+      horizon_time_minutes: 40
 
 
 weather:

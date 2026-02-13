@@ -25,6 +25,8 @@ def crop_traffic_to_circle(traffic: Union[Traffic, Flight], circle_wgs84: Polygo
         Cropped Traffic or Flight object containing only points within the circle.
         The return type matches the input type.
     """
+    if isinstance(traffic, Flight):
+        return traffic.clip(circle_wgs84) # Flight object has no eval() method
     traffic = traffic.clip(circle_wgs84).eval()
     return traffic
 
