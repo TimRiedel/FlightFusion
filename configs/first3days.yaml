@@ -57,7 +57,7 @@ trajectories:
     sampling:
       enabled: true # sampling and clipping cannot be enabled at the same time
       data_period_minutes: 5
-      min_trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
+      min_trajectory_length_minutes: 13 # time including input and horizon segment before end of flight
     clipping:
       enabled: false # sampling and clipping cannot be enabled at the same time
       trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
