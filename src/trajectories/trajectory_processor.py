@@ -367,6 +367,11 @@ class TrajectoryProcessor(DatasetProcessor):
         logger.info(f"    - Computing velocity components...")
         traffic = assign_velocity_components(traffic, resampling_rate_seconds=resampling_rate_seconds)
 
+        # Always save resampled trajectories
+        resampled_path = self._get_output_file_path_for("trajectories-resampled")
+        logger.info(f"    - Saving resampled trajectories to {resampled_path}...")
+        traffic.data.to_parquet(resampled_path)
+
         if is_sampling_enabled:
             data_period_minutes = self.create_training_data_config["sampling"]["data_period_minutes"]
             logger.info(f"    - Drawing samples from trajectories in {data_period_minutes} minutes intervals...")
@@ -403,11 +408,6 @@ class TrajectoryProcessor(DatasetProcessor):
             input_segments.data.to_parquet(inputs_path)
             logger.info(f"    - Saving horizon segments to {horizons_path}.")
             horizon_segments.data.to_parquet(horizons_path)
-
-        # Always save resampled trajectories
-        resampled_path = self._get_output_file_path_for("trajectories-resampled")
-        logger.info(f"    - Saving resampled trajectories to {resampled_path}...")
-        traffic.data.to_parquet(resampled_path)
 
         logger.info(f"✅ Finished creating training data for {self.icao}.\n")
 
