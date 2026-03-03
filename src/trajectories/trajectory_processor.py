@@ -28,7 +28,7 @@ class TrajectoryProcessor(DatasetProcessor):
         self.drop_attributes = task_config.get("drop_attributes", [])
         self.remove_flights_with_recurring_callsings_per_day = task_config.get("remove_flights_with_recurring_callsings_per_day", True)
         self.process_config = task_config["process"]
-        self.create_training_data_config = task_config["create_training_data"]
+        self.training_config = task_config["training"]
 
     # ------------------------------------
     # Utility
@@ -325,29 +325,29 @@ class TrajectoryProcessor(DatasetProcessor):
 
 
     # ------------------------------------
-    # Step 4: Create training data
+    # Step 4: Prepare training data
     # ------------------------------------
 
-    def create_training_data(self):
-        logger.info(f"📊 Creating training data for {self.icao}...")
+    def prepare_training(self):
+        """
+        Prepares the resampled training trajectories from processed data.
 
-        inputs_path = self._get_output_file_path_for("trajectories-inputs")
-        horizons_path = self._get_output_file_path_for("trajectories-horizons")
-        if os.path.exists(inputs_path) and os.path.exists(horizons_path):
-            logger.info(f"    ✓ Found existing input and horizon segments under {inputs_path} and {horizons_path}, skipping creation. To rerun this step, delete the files and run the method again.")
+        Applies runway filtering, unit conversion, local coordinate assignment,
+        resampling, and velocity component computation. Saves the result as
+        trajectories-resampled.parquet, which is the shared input for both
+        create_scenes() and create_flight_segments().
+        """
+        logger.info(f"📊 Preparing training data for {self.icao}...")
+
+        resampled_path = self._get_output_file_path_for("trajectories-resampled")
+        if self._check_current_step_file_exists(resampled_path, "prepare_training"):
             return
 
         processed_trajectories_path = self._get_output_file_path_for("trajectories-processed")
         self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
 
-        is_segmenting_enabled = self.create_training_data_config.get("segmenting", {}).get("enabled", True)
-        is_sampling_enabled = self.create_training_data_config.get("sampling", {}).get("enabled", True)
-        is_clipping_enabled = self.create_training_data_config.get("clipping", {}).get("enabled", False)
-        if is_sampling_enabled and is_clipping_enabled:
-            raise ValueError("Sampling and clipping cannot be enabled at the same time.")
-
         traffic = self._load_traffic(processed_trajectories_path)
-        selected_runways = self.create_training_data_config.get("selected_runways", None)
+        selected_runways = self.training_config.get("selected_runways", None)
         if selected_runways is not None and len(selected_runways) > 0:
             logger.info(f"    - Filtering trajectories by selected runways {selected_runways}...")
             traffic, _ = filter_traffic_by_runway(traffic, selected_runways)
@@ -360,29 +360,107 @@ class TrajectoryProcessor(DatasetProcessor):
         ref_lat, ref_lon = airports[self.icao].latlon
         traffic = assign_local_xy_coordinates(traffic, ref_lat=ref_lat, ref_lon=ref_lon)
 
-        resampling_rate_seconds = self.create_training_data_config["resampling_rate_seconds"]
+        resampling_rate_seconds = self.training_config["resampling_rate_seconds"]
         logger.info(f"    - Resampling trajectories in {resampling_rate_seconds} seconds intervals...")
         traffic = resample_traffic(traffic, resampling_rate_seconds=resampling_rate_seconds)
 
         logger.info(f"    - Computing velocity components...")
         traffic = assign_velocity_components(traffic, resampling_rate_seconds=resampling_rate_seconds)
 
-        # Always save resampled trajectories
-        resampled_path = self._get_output_file_path_for("trajectories-resampled")
         logger.info(f"    - Saving resampled trajectories to {resampled_path}...")
-        traffic.data.to_parquet(resampled_path)
+        self._save_data(traffic.data, resampled_path)
+
+        logger.info(f"✅ Finished preparing training data for {self.icao}.\n")
+
+    # ------------------------------------
+    # Step 5: Create scene manifest
+    # ------------------------------------
+
+    def create_scenes(self):
+        """
+        Creates the scene manifest from the resampled trajectories.
+
+        Each row in the manifest describes one flight within one scene, including
+        the scene's time windows. The manifest is independent of flight segmenting.
+        Only runs if scene_creation.enabled is true in the training config.
+        """
+        logger.info(f"🎬 Creating scene manifest for {self.icao}...")
+
+        scene_creation_config = self.training_config.get("scene_creation", {})
+        if not scene_creation_config.get("enabled", False):
+            logger.info(f"    - Scene creation is disabled, skipping.")
+            logger.info(f"✅ Finished creating scene manifest for {self.icao}.\n")
+            return
+
+        scenes_path = self._get_output_file_path_for("trajectories-scenes")
+        if self._check_current_step_file_exists(scenes_path, "create_scenes"):
+            return
+
+        resampled_path = self._get_output_file_path_for("trajectories-resampled")
+        self._ensure_previous_step_file_exists(resampled_path, "prepare_training")
+
+        traffic = self._load_traffic(resampled_path)
+
+        strategy_config = {
+            **scene_creation_config,
+            "input_time_minutes": self.training_config["input_time_minutes"],
+            "horizon_time_minutes": self.training_config["horizon_time_minutes"],
+        }
+        strategy = build_scene_creation_strategy(strategy_config)
+        logger.info(f"    - Creating scenes using '{scene_creation_config['type']}' strategy...")
+        scenes = strategy.create_scenes(traffic)
+        logger.info(f"    - Created {len(scenes)} scenes.")
+
+        logger.info(f"    - Saving scene manifest to {scenes_path}...")
+        manifest_df = scenes_to_dataframe(scenes)
+        self._save_data(manifest_df, scenes_path)
+
+        logger.info(f"✅ Finished creating scene manifest for {self.icao}.\n")
+
+    # ------------------------------------
+    # Step 6: Create flight segments
+    # ------------------------------------
+
+    def create_flight_segments(self):
+        """
+        Creates per-flight input and horizon segment files from the resampled trajectories.
+
+        Optionally samples (multiple time-shifted copies per flight) or clips
+        (trims to a fixed length before landing) the resampled flights before
+        segmenting each into an input and horizon portion. Sampling and clipping
+        are mutually exclusive.
+        """
+        logger.info(f"✂️  Creating flight segments for {self.icao}...")
+
+        inputs_path = self._get_output_file_path_for("trajectories-inputs")
+        horizons_path = self._get_output_file_path_for("trajectories-horizons")
+        if os.path.exists(inputs_path) and os.path.exists(horizons_path):
+            logger.info(f"    ✓ Found existing segment files, skipping. To rerun, delete the files.")
+            logger.info(f"✅ Finished creating flight segments for {self.icao}.\n")
+            return
+
+        resampled_path = self._get_output_file_path_for("trajectories-resampled")
+        self._ensure_previous_step_file_exists(resampled_path, "prepare_training")
+
+        is_sampling_enabled = self.training_config.get("sampling", {}).get("enabled", False)
+        is_clipping_enabled = self.training_config.get("clipping", {}).get("enabled", False)
+        if is_sampling_enabled and is_clipping_enabled:
+            raise ValueError("Sampling and clipping cannot be enabled at the same time.")
+
+        resampling_rate_seconds = self.training_config["resampling_rate_seconds"]
+        traffic = self._load_traffic(resampled_path)
 
         if is_sampling_enabled:
-            data_period_minutes = self.create_training_data_config["sampling"]["data_period_minutes"]
+            data_period_minutes = self.training_config["sampling"]["data_period_minutes"]
             logger.info(f"    - Drawing samples from trajectories in {data_period_minutes} minutes intervals...")
             traffic = sample_trajectories(
                 traffic,
                 data_period_minutes=data_period_minutes,
-                min_trajectory_length_minutes=self.create_training_data_config["sampling"]["min_trajectory_length_minutes"],
+                min_trajectory_length_minutes=self.training_config["sampling"]["min_trajectory_length_minutes"],
             )
 
         if is_clipping_enabled:
-            trajectory_length_minutes = self.create_training_data_config["clipping"]["trajectory_length_minutes"]
+            trajectory_length_minutes = self.training_config["clipping"]["trajectory_length_minutes"]
             logger.info(f"    - Clipping trajectories to {trajectory_length_minutes} minutes before end...")
             traffic, removal_reasons = clip_trajectories(
                 traffic,
@@ -390,26 +468,26 @@ class TrajectoryProcessor(DatasetProcessor):
             )
             self._log_removal_reasons(removal_reasons)
 
+        input_time_minutes = self.training_config["input_time_minutes"]
+        horizon_time_minutes = self.training_config["horizon_time_minutes"]
+        if is_clipping_enabled:
+            horizon_time_minutes = min(horizon_time_minutes, trajectory_length_minutes - input_time_minutes)
 
-        if is_segmenting_enabled:
-            logger.info(f"    - Segmenting input and horizon segments...")
-            input_time_minutes = self.create_training_data_config["segmenting"]["input_time_minutes"]
-            horizon_time_minutes = self.create_training_data_config["segmenting"]["horizon_time_minutes"]
-            if is_clipping_enabled:
-                horizon_time_minutes = min(horizon_time_minutes, trajectory_length_minutes - input_time_minutes)
-            self._log_segmenting_info(input_time_minutes, horizon_time_minutes, resampling_rate_seconds)
-            input_segments, horizon_segments = get_input_horizon_segments(traffic,
-                input_time_minutes=input_time_minutes,
-                horizon_time_minutes=horizon_time_minutes,
-                resampling_rate_seconds=resampling_rate_seconds
-            )
+        logger.info(f"    - Segmenting into input and horizon segments...")
+        self._log_segmenting_info(input_time_minutes, horizon_time_minutes, resampling_rate_seconds)
+        input_segments, horizon_segments = get_input_horizon_segments(
+            traffic,
+            input_time_minutes=input_time_minutes,
+            horizon_time_minutes=horizon_time_minutes,
+            resampling_rate_seconds=resampling_rate_seconds,
+        )
 
-            logger.info(f"    - Saving input segments to {inputs_path}...")
-            input_segments.data.to_parquet(inputs_path)
-            logger.info(f"    - Saving horizon segments to {horizons_path}.")
-            horizon_segments.data.to_parquet(horizons_path)
+        logger.info(f"    - Saving input segments to {inputs_path}...")
+        input_segments.data.to_parquet(inputs_path)
+        logger.info(f"    - Saving horizon segments to {horizons_path}.")
+        horizon_segments.data.to_parquet(horizons_path)
 
-        logger.info(f"✅ Finished creating training data for {self.icao}.\n")
+        logger.info(f"✅ Finished creating flight segments for {self.icao}.\n")
 
     def _log_segmenting_info(self, input_time_minutes: int, horizon_time_minutes: int, resampling_rate_seconds: int):
         num_input_points = input_time_minutes * 60 // resampling_rate_seconds

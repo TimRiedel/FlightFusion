@@ -3,7 +3,7 @@ import copy
 import yaml
 
 TASK_STEPS = {
-    "trajectories": ["download", "clean", "process", "create_training_data", "all"],
+    "trajectories": ["download", "clean", "process", "prepare_training", "create_scenes", "create_flight_segments", "all"],
     "flightinfo": ["extract", "all"],
     "metar": ["download", "parse", "process", "all"],
     "weather": ["download", "merge", "all"],

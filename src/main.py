@@ -96,8 +96,12 @@ def main():
                 trajectory_processor.clean_trajectories()
             if step in ["all", "process"]:
                 trajectory_processor.process_trajectories()
-            if step in ["all", "create_training_data"]:
-                trajectory_processor.create_training_data()
+            if step in ["all", "prepare_training"]:
+                trajectory_processor.prepare_training()
+            if step in ["all", "create_scenes"]:
+                trajectory_processor.create_scenes()
+            if step in ["all", "create_flight_segments"]:
+                trajectory_processor.create_flight_segments()
 
         if task in ["flightinfo", "all"]:
             logger.info(f"==================== Running task 'flightinfo' for {icao} ====================\n")

@@ -51,20 +51,26 @@ trajectories:
         track_threshold: 330
         time_window_seconds: 500
 
-  create_training_data:
+  training:
     resampling_rate_seconds: 30
     selected_runways: ["24L"]
-    sampling:
-      enabled: true # sampling and clipping cannot be enabled at the same time
-      data_period_minutes: 5
-      min_trajectory_length_minutes: 13 # time including input and horizon segment before end of flight
-    clipping:
-      enabled: false # sampling and clipping cannot be enabled at the same time
-      trajectory_length_minutes: 15 # time including input and horizon segment before end of flight
-    segmenting:
+    input_time_minutes: 5
+    horizon_time_minutes: 40
+
+    scene_creation:
       enabled: true
-      input_time_minutes: 5
-      horizon_time_minutes: 40
+      type: "sampling"   # "flight_appears" or "sampling"
+      min_trajectory_length_minutes: 13 # minimum flight duration to trigger a new scene
+      data_period_minutes: 5            # sliding interval between scenes (sampling only)
+
+    # sampling and clipping cannot be enabled at the same time
+    sampling:
+      enabled: true
+      data_period_minutes: 5
+      min_trajectory_length_minutes: 13
+    clipping:
+      enabled: false
+      trajectory_length_minutes: 15
 
 
 weather:
