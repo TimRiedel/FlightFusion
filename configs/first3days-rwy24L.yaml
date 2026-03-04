@@ -59,15 +59,16 @@ trajectories:
 
     scene_creation:
       enabled: true
-      type: "sampling"   # "flight_appears" or "sampling"
-      min_trajectory_length_minutes: 13
-      data_period_minutes: 5
+      type: "continuous"   # "flight_appears" or "sampling" or "continuous" or "anchored_continuous"
+      min_horizon_length_minutes: 3   # minimum time from prediction start until a flight becomes uninteresting (after final approach fix)
+      min_trajectory_length_minutes: 15
+      data_period_minutes: 4
 
     # sampling and clipping cannot be enabled at the same time
     sampling:
       enabled: true
       data_period_minutes: 5
-      min_trajectory_length_minutes: 13
+      min_trajectory_length_minutes: 15
     clipping:
       enabled: false
       trajectory_length_minutes: 15

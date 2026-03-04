@@ -59,15 +59,16 @@ trajectories:
 
     scene_creation:
       enabled: true
-      type: "sampling"   # "flight_appears" or "sampling"
-      min_trajectory_length_minutes: 13 # minimum flight duration to trigger a new scene
-      data_period_minutes: 5            # sliding interval between scenes (sampling only)
+      type: "continuous"   # "flight_appears" or "sampling" or "continuous" or "anchored_continuous"
+      min_horizon_length_minutes: 3     # minimum horizon length for a flight to be included in a scene
+      min_trajectory_length_minutes: 15 # minimum flight duration to trigger a new scene for flight-centric strategies
+      data_period_minutes: 4            # sliding interval between scenes (sampling only)
 
     # sampling and clipping cannot be enabled at the same time
     sampling:
       enabled: true
       data_period_minutes: 5
-      min_trajectory_length_minutes: 13
+      min_trajectory_length_minutes: 15
     clipping:
       enabled: false
       trajectory_length_minutes: 15
