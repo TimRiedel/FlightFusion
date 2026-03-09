@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 import pyproj
+from scipy.spatial import KDTree
 from traffic.core import Traffic, Flight
 
 from .great_circle_calculations import haversine_distance
@@ -438,5 +439,126 @@ def assign_velocity_components(traffic: Traffic, resampling_rate_seconds: float)
         .fillna(0.0)
         .round(2)
     )
-    
+
+    return Traffic(df)
+
+
+def compute_traffic_count_around_aircraft(traffic: Traffic, aircraft_radius_m: float) -> Traffic:
+    """
+    Counts the number of other aircraft within a given radius of each aircraft.
+
+    For every waypoint of every flight, counts how many other aircraft are
+    present at the same timestamp within the specified distance. Uses local
+    AEQD coordinates (x_coord, y_coord) for fast Euclidean distance
+    computation via KDTree spatial indexing.
+
+    Parameters
+    ----------
+    traffic : Traffic
+        Traffic object containing resampled trajectory data with 'timestamp',
+        'flight_id', 'x_coord', and 'y_coord' columns. Coordinates must be in
+        meters (e.g. from assign_local_xy_coordinates).
+    aircraft_radius_m : float
+        Distance threshold in meters. Aircraft closer than this distance are
+        counted as nearby traffic.
+
+    Returns
+    -------
+    Traffic
+        Traffic object with an added 'traffic_count_vicinity' column indicating
+        how many other aircraft are within the radius at each waypoint.
+    """
+    df = traffic.data.copy()
+    df["traffic_count_vicinity"] = 0
+
+    for _, timestep_group in df.groupby("timestamp"):
+        if len(timestep_group) <= 1:
+            continue
+
+        coords = timestep_group[["x_coord", "y_coord"]].to_numpy()
+        tree = KDTree(coords)
+
+        # Count neighbours within radius (includes self, so subtract 1)
+        neighbours_per_point = tree.query_ball_point(coords, r=aircraft_radius_m)
+        counts = np.array([len(neighbours) - 1 for neighbours in neighbours_per_point])
+
+        df.loc[timestep_group.index, "traffic_count_vicinity"] = counts
+
+    return Traffic(df)
+
+
+def compute_traffic_count_around_airport(traffic: Traffic, airport_radius_m: float) -> Traffic:
+    """
+    Counts the number of other aircraft within a given radius of the airport.
+
+    For every waypoint, counts how many other aircraft are present at the same
+    timestamp within the specified distance from the airport. Since x_coord and
+    y_coord are in a local AEQD coordinate system centred on the airport, the
+    distance from the airport is simply the Euclidean norm of those coordinates.
+
+    An aircraft is excluded from its own count (subtract 1 if the aircraft
+    itself lies within the airport radius).
+
+    Parameters
+    ----------
+    traffic : Traffic
+        Traffic object containing resampled trajectory data with 'timestamp',
+        'flight_id', 'x_coord', and 'y_coord' columns. Coordinates must be in
+        metres centred on the airport (e.g. from assign_local_xy_coordinates).
+    airport_radius_m : float
+        Radius in metres around the airport within which aircraft are counted.
+
+    Returns
+    -------
+    Traffic
+        Traffic object with an added 'traffic_count_airport' column indicating
+        how many other aircraft are within the airport radius at each waypoint.
+    """
+    df = traffic.data.copy()
+
+    distance_from_airport = np.sqrt(df["x_coord"] ** 2 + df["y_coord"] ** 2)
+    df["_within_airport_radius"] = distance_from_airport <= airport_radius_m
+
+    # Count aircraft within the airport radius per timestamp
+    count_per_timestamp = (
+        df[df["_within_airport_radius"]]
+        .groupby("timestamp")["flight_id"]
+        .count()
+    )
+    df["traffic_count_airport"] = df["timestamp"].map(count_per_timestamp).fillna(0).astype(int)
+
+    # Subtract 1 for aircraft that are themselves within the airport radius (exclude self)
+    df.loc[df["_within_airport_radius"], "traffic_count_airport"] -= 1
+
+    df = df.drop(columns=["_within_airport_radius"])
+
+    return Traffic(df)
+
+
+def compute_traffic_count_overall(traffic: Traffic) -> Traffic:
+    """
+    Counts the total number of other aircraft airborne at each waypoint's timestamp.
+
+    For every waypoint, counts how many other flights have a record at the same
+    timestamp, regardless of their spatial position. This provides a measure of
+    overall traffic load in the dataset at each point in time.
+
+    Parameters
+    ----------
+    traffic : Traffic
+        Traffic object containing resampled trajectory data with 'timestamp'
+        and 'flight_id' columns.
+
+    Returns
+    -------
+    Traffic
+        Traffic object with an added 'traffic_count_overall' column indicating
+        how many other aircraft are present at each waypoint's timestamp.
+    """
+    df = traffic.data.copy()
+
+    # Count aircraft per timestamp, then subtract 1 to exclude self
+    aircraft_per_timestamp = df.groupby("timestamp")["flight_id"].transform("count")
+    df["traffic_count_overall"] = aircraft_per_timestamp - 1
+
     return Traffic(df)

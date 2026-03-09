@@ -53,9 +53,11 @@ trajectories:
 
   training:
     resampling_rate_seconds: 30
-    selected_runways: ["24L"]
     input_time_minutes: 5
     horizon_time_minutes: 40
+    traffic_count_aircraft_radius_m: 50000
+    traffic_count_airport_radius_m: 75000
+    selected_runways: ["24L"]
 
     scene_creation:
       enabled: true
