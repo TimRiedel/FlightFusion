@@ -61,11 +61,11 @@ trajectories:
 
     scene_creation:
       enabled: true
-      type: "traffic_adaptive"   # "flight_appears" or "sampling" or "continuous" or "anchored_continuous" or "traffic_adaptive"
+      type: "traffic_adaptive"          # "flight_appears", "sampling", "continuous" or "traffic_adaptive"
       min_horizon_length_minutes: 3     # minimum horizon length for a flight to be included in a scene
       min_trajectory_length_minutes: 15 # minimum flight duration to trigger a new scene for flight-centric strategies
       data_period_minutes: 5            # sliding interval between scenes
-      min_data_period_minutes: 1
+      min_data_period_minutes: 1        # minimum sliding interval in high-traffic periods (traffic_adaptive)
 
     # sampling and clipping cannot be enabled at the same time
     sampling:
