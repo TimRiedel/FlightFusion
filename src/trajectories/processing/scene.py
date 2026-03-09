@@ -400,12 +400,16 @@ class TrafficAdaptiveSceneCreationStrategy(SceneCreationStrategy):
     min_data_period_minutes, default 1 min) to capture rapidly changing
     constellations. In low-traffic periods it advances in larger steps (up to
     max_data_period_minutes, default 4 min) to avoid redundant, near-identical
-    scenes. Between the two thresholds the step size is linearly interpolated.
+    scenes. Between the two thresholds the step size follows a power curve that
+    keeps steps near the maximum for most traffic levels and only drops 
+    to the minimum at high traffic counts.
 
-    Traffic density is measured as the number of flights within airport_radius_m
-    of the airport (x_coord=0, y_coord=0) at input_start_time. This captures
-    terminal-area density, which is where aircraft interactions occur, rather
-    than counting aircraft scattered across the full ±300 km sector.
+    Traffic density is measured as the peak number of flights within airport_radius_m
+    of the airport (x_coord=0, y_coord=0) across the full scene window
+    [input_start, prediction_end]. Taking the peak over the window rather than
+    a snapshot at input_start means that aircraft currently far out but converging
+    toward the terminal area will drive a high density signal — and thus a small
+    step size — even before they arrive.
     """
 
     def __init__(
@@ -473,20 +477,26 @@ class TrafficAdaptiveSceneCreationStrategy(SceneCreationStrategy):
         counts = per_minute.astype(int)
         return counts
 
-    def _traffic_count_at_time(
+    def _peak_traffic_in_window(
         self,
         counts: pd.Series,
-        t: pd.Timestamp,
+        window_start: pd.Timestamp,
+        window_end: pd.Timestamp,
     ) -> int:
-        floored = t.floor("1min")
-        if floored in counts.index:
-            return int(counts.loc[floored])
-        return 0
+        """Max airport-vicinity density across the full scene window."""
+        return int(counts.loc[window_start.floor("1min"):window_end.floor("1min")].max())
 
     def _data_period_for_traffic(
         self, peak_count: int, low_threshold: int, high_threshold: int
     ) -> int:
-        """Linearly interpolate the step size between the two thresholds."""
+        """Interpolate the step size between the two thresholds.
+
+        Uses a power curve (exponent > 1) so that the step size stays close to
+        max_data_period_minutes across most of the traffic range and only drops
+        sharply to min_data_period_minutes at very high counts.
+        """
+        CURVE_EXPONENT = 3
+
         if high_threshold <= low_threshold:
             return self.max_data_period_minutes
         if peak_count >= high_threshold:
@@ -495,7 +505,7 @@ class TrafficAdaptiveSceneCreationStrategy(SceneCreationStrategy):
             return self.max_data_period_minutes
 
         ratio = (peak_count - low_threshold) / (high_threshold - low_threshold)
-        data_period = self.max_data_period_minutes - ratio * (
+        data_period = self.max_data_period_minutes - ratio ** CURVE_EXPONENT * (
             self.max_data_period_minutes - self.min_data_period_minutes
         )
         return round(data_period)
@@ -525,7 +535,7 @@ class TrafficAdaptiveSceneCreationStrategy(SceneCreationStrategy):
                 scenes.append(scene)
                 scene_id += 1
 
-            density = self._traffic_count_at_time(counts, current_time)
+            density = self._peak_traffic_in_window(counts, current_time, prediction_end_time)
             step = self._data_period_for_traffic(density, low_threshold, high_threshold)
             current_time += timedelta(minutes=step)
 
