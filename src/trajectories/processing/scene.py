@@ -21,6 +21,9 @@ class Scene:
     prediction_start_time: pd.Timestamp
     prediction_end_time: pd.Timestamp
 
+    def __len__(self) -> int:
+        return len(self.flight_ids)
+
 
 class SceneCreationStrategy(ABC):
     """
@@ -103,7 +106,10 @@ class SceneCreationStrategy(ABC):
         for flight in window_traffic:
             if flight.start > input_start_time:
                 continue
-            if flight.duration.components.minutes < self.min_scene_presence_minutes:
+
+            window_end = min(flight.stop, prediction_end_time)
+            presence_minutes = (window_end - input_start_time).total_seconds() / 60
+            if presence_minutes < self.min_scene_presence_minutes:
                 continue
             flight_ids.append(flight.flight_id)
         return flight_ids
@@ -386,6 +392,146 @@ class AnchoredContinuousSceneCreationStrategy(SceneCreationStrategy):
         return scenes
 
 
+class TrafficAdaptiveSceneCreationStrategy(SceneCreationStrategy):
+    """
+    A continuous sliding-window strategy whose step size adapts to traffic density.
+
+    In high-traffic periods the window advances in small steps (down to
+    min_data_period_minutes, default 1 min) to capture rapidly changing
+    constellations. In low-traffic periods it advances in larger steps (up to
+    max_data_period_minutes, default 4 min) to avoid redundant, near-identical
+    scenes. Between the two thresholds the step size is linearly interpolated.
+
+    Traffic density is measured as the number of flights within airport_radius_m
+    of the airport (x_coord=0, y_coord=0) at input_start_time. This captures
+    terminal-area density, which is where aircraft interactions occur, rather
+    than counting aircraft scattered across the full ±300 km sector.
+    """
+
+    def __init__(
+        self,
+        input_time_minutes: int,
+        horizon_time_minutes: int,
+        min_trajectory_length_minutes: int,
+        min_horizon_length_minutes: int = 3,
+        min_data_period_minutes: int = 1,
+        max_data_period_minutes: int = 5,
+        airport_radius_m: float = 50_000,
+        low_traffic_threshold: int | None = None,
+        high_traffic_threshold: int | None = None,
+    ):
+        """
+        Args:
+            min_data_period_minutes: Step size when traffic >= high_traffic_threshold.
+            max_data_period_minutes: Step size when traffic <= low_traffic_threshold.
+            airport_radius_m: Radius in metres around the airport origin within
+                which flights are counted for the density signal (default 50 000 m).
+            low_traffic_threshold: Flight count at or below which the maximum
+                (slowest) step size is used. If None, derived from the minimum
+                of the density series at runtime.
+            high_traffic_threshold: Flight count at or above which the minimum
+                (fastest) step size is used. If None, derived from the maximum
+                of the density series at runtime.
+        """
+        super().__init__(
+            input_time_minutes=input_time_minutes,
+            horizon_time_minutes=horizon_time_minutes,
+            min_trajectory_length_minutes=min_trajectory_length_minutes,
+            min_horizon_length_minutes=min_horizon_length_minutes,
+        )
+        self.min_data_period_minutes = min_data_period_minutes
+        self.max_data_period_minutes = max_data_period_minutes
+        self.airport_radius_m = airport_radius_m
+        self.low_traffic_threshold = low_traffic_threshold
+        self.high_traffic_threshold = high_traffic_threshold
+
+    def _build_traffic_count_series(
+        self,
+        traffic: Traffic,
+        global_start: pd.Timestamp,
+        global_end: pd.Timestamp,
+    ) -> pd.Series:
+        """
+        Returns a Series indexed by 1-minute timestamps with the number of
+        flights within airport_radius_m of the airport at each minute.
+        """
+        minute_index = pd.date_range(global_start, global_end, freq="1min")
+        counts = pd.Series(0, index=minute_index, dtype=int)
+
+        df = traffic.data
+        radius_sq = self.airport_radius_m ** 2
+        within = df.loc[
+            df["x_coord"] ** 2 + df["y_coord"] ** 2 <= radius_sq,
+            ["timestamp", "flight_id"],
+        ]
+        within = within.copy()
+        within["timestamp"] = within["timestamp"].dt.floor("1min")
+        within = within.drop_duplicates()
+
+        per_minute = within.groupby("timestamp")["flight_id"].nunique()
+        per_minute = per_minute.reindex(minute_index, fill_value=0)
+        counts = per_minute.astype(int)
+        return counts
+
+    def _traffic_count_at_time(
+        self,
+        counts: pd.Series,
+        t: pd.Timestamp,
+    ) -> int:
+        floored = t.floor("1min")
+        if floored in counts.index:
+            return int(counts.loc[floored])
+        return 0
+
+    def _data_period_for_traffic(
+        self, peak_count: int, low_threshold: int, high_threshold: int
+    ) -> int:
+        """Linearly interpolate the step size between the two thresholds."""
+        if high_threshold <= low_threshold:
+            return self.max_data_period_minutes
+        if peak_count >= high_threshold:
+            return self.min_data_period_minutes
+        if peak_count <= low_threshold:
+            return self.max_data_period_minutes
+
+        ratio = (peak_count - low_threshold) / (high_threshold - low_threshold)
+        data_period = self.max_data_period_minutes - ratio * (
+            self.max_data_period_minutes - self.min_data_period_minutes
+        )
+        return round(data_period)
+
+    def create_scenes(self, traffic: Traffic) -> list[Scene]:
+        global_start = traffic.data["timestamp"].min()
+        global_end = traffic.data["timestamp"].max()
+        scene_window_minutes = self.input_time_minutes + self.horizon_time_minutes
+
+        counts = self._build_traffic_count_series(traffic, global_start, global_end)
+
+        low_threshold = self.low_traffic_threshold if self.low_traffic_threshold is not None else int(counts.min())
+        high_threshold = self.high_traffic_threshold if self.high_traffic_threshold is not None else int(counts.max())
+
+        current_time = global_start
+        scenes = []
+        scene_id = 0
+        while current_time <= global_end:
+            prediction_end_time = current_time + timedelta(minutes=scene_window_minutes)
+            flight_ids = self.collect_flight_ids(
+                traffic,
+                input_start_time=current_time,
+                prediction_end_time=prediction_end_time,
+            )
+            if flight_ids:
+                scene = self.build_scene_from_flight_ids(scene_id, current_time, flight_ids)
+                scenes.append(scene)
+                scene_id += 1
+
+            density = self._traffic_count_at_time(counts, current_time)
+            step = self._data_period_for_traffic(density, low_threshold, high_threshold)
+            current_time += timedelta(minutes=step)
+
+        return scenes
+
+
 def scenes_to_dataframe(scenes: list[Scene]) -> pd.DataFrame:
     """
     Converts a list of Scene objects to a flat manifest DataFrame.
@@ -417,7 +563,8 @@ def build_scene_creation_strategy(config: dict) -> SceneCreationStrategy:
     Instantiates a SceneCreationStrategy from a config dict.
 
     Expected config keys:
-        type (str): "flight_appears", "sampling", "continuous", "anchored_continuous"
+        type (str): "flight_appears", "sampling", "continuous", "anchored_continuous",
+            "traffic_adaptive"
         input_time_minutes (int)
         horizon_time_minutes (int)
         min_trajectory_length_minutes (int)
@@ -469,9 +616,19 @@ def build_scene_creation_strategy(config: dict) -> SceneCreationStrategy:
             min_anchor_gap_minutes=config.get("min_anchor_gap_minutes", 1),
             min_horizon_length_minutes=min_horizon_length_minutes,
         )
+    elif strategy_type == "traffic_adaptive":
+        return TrafficAdaptiveSceneCreationStrategy(
+            input_time_minutes=input_time_minutes,
+            horizon_time_minutes=horizon_time_minutes,
+            min_trajectory_length_minutes=min_trajectory_length_minutes,
+            min_data_period_minutes=config.get("min_data_period_minutes", 1),
+            max_data_period_minutes=config.get("data_period_minutes", 5),
+            airport_radius_m=config.get("traffic_count_airport_radius_m", 50_000),
+            min_horizon_length_minutes=min_horizon_length_minutes,
+        )
     else:
         raise ValueError(
             f"Unknown scene creation strategy type: '{strategy_type}'. "
-            "Expected 'flight_appears', 'sampling', 'continuous', or 'anchored_continuous'."
+            "Expected 'flight_appears', 'sampling', 'continuous', "
+            "'anchored_continuous', or 'traffic_adaptive'."
         )
-

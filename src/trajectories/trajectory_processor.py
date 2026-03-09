@@ -416,6 +416,7 @@ class TrajectoryProcessor(DatasetProcessor):
             **scene_creation_config,
             "input_time_minutes": self.training_config["input_time_minutes"],
             "horizon_time_minutes": self.training_config["horizon_time_minutes"],
+            "traffic_count_airport_radius_m": self.training_config["traffic_count_airport_radius_m"],
         }
         strategy = build_scene_creation_strategy(strategy_config)
         logger.info(f"    - Creating scenes using '{scene_creation_config['type']}' strategy...")
