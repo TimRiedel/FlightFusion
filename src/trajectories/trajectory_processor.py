@@ -347,10 +347,6 @@ class TrajectoryProcessor(DatasetProcessor):
         self._ensure_previous_step_file_exists(processed_trajectories_path, "process")
 
         traffic = self._load_traffic(processed_trajectories_path)
-        selected_runways = self.training_config.get("selected_runways", None)
-        if selected_runways is not None and len(selected_runways) > 0:
-            logger.info(f"    - Filtering trajectories by selected runways {selected_runways}...")
-            traffic, _ = filter_traffic_by_runway(traffic, selected_runways)
 
         resampling_rate_seconds = self.training_config["resampling_rate_seconds"]
         logger.info(f"    - Resampling trajectories in {resampling_rate_seconds} seconds intervals...")
@@ -377,6 +373,11 @@ class TrajectoryProcessor(DatasetProcessor):
         aircraft_radius_m = self.training_config["traffic_count_aircraft_radius_m"]
         logger.info(f"    - Computing traffic count around each aircraft ({aircraft_radius_m}m radius)...")
         traffic = compute_traffic_count_around_aircraft(traffic, aircraft_radius_m=aircraft_radius_m)
+
+        selected_runways = self.training_config.get("selected_runways", None)
+        if selected_runways is not None and len(selected_runways) > 0:
+            logger.info(f"    - Filtering trajectories by selected runways {selected_runways}...")
+            traffic, _ = filter_traffic_by_runway(traffic, selected_runways)
 
         logger.info(f"    - Saving resampled trajectories to {resampled_path}...")
         self._save_data(traffic.data, resampled_path)
