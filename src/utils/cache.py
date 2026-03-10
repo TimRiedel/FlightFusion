@@ -65,10 +65,14 @@ class Cache:
         return os.path.join(self.cache_dir, f"{dataset_name}_{year}-{month:02d}-{hash_val}.grib")
 
     def _get_metar_file_path(self, request_config: dict, hash_val: str):
-        return os.path.join(self.cache_dir, f"{self.icao}_metar_{hash_val}.parquet")
+        start_date = request_config["start_dt"][:10]
+        end_date = request_config["end_dt"][:10]
+        return os.path.join(self.cache_dir, f"{self.icao}_metar_{start_date}_{end_date}_{hash_val}.parquet")
 
     def _get_trajectories_file_path(self, request_config: dict, hash_val: str):
-        return os.path.join(self.cache_dir, f"{self.icao}_trajectories_{hash_val}.parquet")
+        date = request_config["start_dt"][:10]
+        return os.path.join(self.cache_dir, f"{self.icao}_trajectories_{date}_{hash_val}.parquet")
 
     def _get_flightlist_file_path(self, request_config: dict, hash_val: str):
-        return os.path.join(self.cache_dir, f"{self.icao}_flightlist_{hash_val}.parquet")
+        date = request_config["start_dt"][:10]
+        return os.path.join(self.cache_dir, f"{self.icao}_flightlist_{date}_{hash_val}.parquet")
