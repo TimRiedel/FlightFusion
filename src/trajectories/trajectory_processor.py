@@ -1,17 +1,15 @@
 import os
+import warnings
 from contextlib import contextmanager
 from datetime import datetime
-import warnings
 
 import pandas as pd
 from common.dataset_processor import DatasetProcessor, ProcessingConfig
-from traffic.core import Traffic, Flight
+from traffic.core import Flight, Traffic
 from traffic.data import airports
-
-from common.dataset_processor import DatasetProcessor
 from trajectories.processing import *
-from utils.logger import logger
 from utils.cache import Cache
+from utils.logger import logger
 
 # Suppress the RuntimeWarning about numexpr engine fallback
 warnings.filterwarnings('ignore', message='.*numexpr does not support extension array dtypes.*', category=RuntimeWarning)
@@ -112,7 +110,7 @@ class TrajectoryProcessor(DatasetProcessor):
             logger.info(f"        - Assigning distance to target...")
             traffic = assign_distance_to_target(traffic, lat, lon)
             if self.crop_to_circle:
-                logger.info(f"       - Cropping trajectories to circle with radius {self.radius_km}km around airport...")
+                logger.info(f"       - Cropping trajectories to circle with radius {self.radius_m / 1000}km around airport...")
                 traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
             all_traffic_dfs.append(traffic.data)
@@ -378,6 +376,16 @@ class TrajectoryProcessor(DatasetProcessor):
         aircraft_radius_m = self.training_config["traffic_count_aircraft_radius_m"]
         logger.info(f"    - Computing traffic count around each aircraft ({aircraft_radius_m}m radius)...")
         traffic = compute_traffic_count_around_aircraft(traffic, aircraft_radius_m=aircraft_radius_m)
+
+        look_ahead_distance_m = self.training_config["traffic_count_look_ahead_distance_m"]
+        look_back_distance_m = self.training_config["traffic_count_look_back_distance_m"]
+        logger.info(f"    - Computing cosequenced traffic count (look_ahead={look_ahead_distance_m}m, look_back={look_back_distance_m}m)...")
+        traffic = compute_cosequenced_traffic_count(
+            traffic,
+            look_ahead_distance_m=look_ahead_distance_m,
+            look_back_distance_m=look_back_distance_m,
+            airport_radius_m=airport_radius_m,
+        )
 
         selected_runways = self.training_config.get("selected_runways", None)
         if selected_runways is not None and len(selected_runways) > 0:

@@ -535,6 +535,76 @@ def compute_traffic_count_around_airport(traffic: Traffic, airport_radius_m: flo
     return Traffic(df)
 
 
+def compute_cosequenced_traffic_count(
+    traffic: Traffic,
+    look_ahead_distance_m: float,
+    look_back_distance_m: float,
+    airport_radius_m: float,
+) -> Traffic:
+    """
+    Counts co-sequenced traffic for each aircraft at each timestep.
+
+    For each flight at each timestep, counts how many other aircraft are flying
+    within a distance-based "donut ring" centred on that flight's distance from
+    the airport. This captures aircraft that are roughly at the same stage of
+    approach (ahead or behind by the configured look-ahead/look-back distances).
+
+    Special case: when a flight is already very close to the airport
+    (distance < airport_radius_m - look_back_distance_m), all aircraft within
+    airport_radius_m are counted instead of a donut ring, because the donut
+    would otherwise extend behind the airport reference point.
+
+    Requires x_coord and y_coord columns in metres centred on the airport
+    (e.g. from assign_local_xy_coordinates).
+
+    Parameters
+    ----------
+    traffic : Traffic
+        Traffic object with 'timestamp', 'flight_id', 'x_coord', 'y_coord'.
+    look_ahead_distance_m : float
+        How far ahead of the current flight (closer to airport) to include, in metres.
+    look_back_distance_m : float
+        How far behind the current flight (farther from airport) to include, in metres.
+    airport_radius_m : float
+        Fallback radius used when a flight is very close to the airport.
+
+    Returns
+    -------
+    Traffic
+        Traffic object with an added 'traffic_count_cosequenced' column.
+    """
+    df = traffic.data.copy()
+    df["_dist_m"] = np.sqrt(df["x_coord"] ** 2 + df["y_coord"] ** 2)
+    df["traffic_count_cosequenced"] = 0
+
+    for _, group in df.groupby("timestamp"):
+        if len(group) <= 1:
+            continue
+
+        distances = group["_dist_m"].to_numpy()
+        counts = np.zeros(len(distances), dtype=int)
+
+        for i, distance in enumerate(distances):
+            
+            # Ensure that we always maintain the look_back_distance_m
+            # and not lose the lookback as soon as we enter the airport radius
+            if distance < airport_radius_m - look_back_distance_m:
+                distances_in_range = distances <= airport_radius_m
+            # Donut shaped ring
+            else:
+                distances_in_range = (
+                    (distances >= distance - look_ahead_distance_m) &
+                    (distances <= distance + look_back_distance_m)
+                )
+            distances_in_range[i] = False  # exclude self
+            counts[i] = distances_in_range.sum()
+
+        df.loc[group.index, "traffic_count_cosequenced"] = counts
+
+    df = df.drop(columns=["_dist_m"])
+    return Traffic(df)
+
+
 def compute_traffic_count_overall(traffic: Traffic) -> Traffic:
     """
     Counts the total number of other aircraft airborne at each waypoint's timestamp.

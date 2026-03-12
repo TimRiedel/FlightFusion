@@ -57,6 +57,8 @@ trajectories:
     horizon_time_minutes: 40
     traffic_count_aircraft_radius_m: 50000
     traffic_count_airport_radius_m: 75000
+    traffic_count_look_ahead_distance_m: 75000
+    traffic_count_look_back_distance_m: 25000
     selected_runways: ["24L"]
 
     scene_creation:
