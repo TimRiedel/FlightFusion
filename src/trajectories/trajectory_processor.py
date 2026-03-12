@@ -105,9 +105,14 @@ class TrajectoryProcessor(DatasetProcessor):
             for reason in removal_reasons:
                 logger.info(f"            - {reason}")
 
-            logger.info(f"        - Assigning distance to target and cropping to circle (if enabled)...")
+            if len(traffic) == 0:
+                logger.warning(f"        ✗ No trajectories left after dropping flights with recurring callsigns and same departure and arrival airport for day {day.strftime('%Y-%m-%d')}. Skipping day.")
+                continue
+
+            logger.info(f"        - Assigning distance to target...")
             traffic = assign_distance_to_target(traffic, lat, lon)
             if self.crop_to_circle:
+                logger.info(f"       - Cropping trajectories to circle with radius {self.radius_km}km around airport...")
                 traffic = crop_traffic_to_circle(traffic, self.airport_circle)
 
             all_traffic_dfs.append(traffic.data)

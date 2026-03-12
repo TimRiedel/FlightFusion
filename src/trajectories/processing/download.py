@@ -1,8 +1,10 @@
 import datetime
+
 import pandas as pd
 import shapely
-from traffic.data import opensky
 from traffic.core import Traffic
+from traffic.data import opensky
+
 
 def download_flightlist(icao: str, start: str, end: str):
     """
@@ -27,7 +29,8 @@ def download_flightlist(icao: str, start: str, end: str):
         start=start,
         stop=end
     )
-    return flightlist
+    # Flightlist can contain many duplicates - necessary to not filter out valid flights later
+    return flightlist.drop_duplicates(subset=['icao24', 'callsign', 'firstseen', 'lastseen'])
 
 def download_flight(callsign: str, start: str, end: str):
     """
@@ -56,7 +59,7 @@ def download_flight(callsign: str, start: str, end: str):
     )
     return flight
 
-def download_traffic(icao: str, start: str, end: str, bounds: tuple | shapely.geometry.Polygon, traffic_type: str = "all"):
+def download_traffic(icao: str, start: str, end: str, bounds: tuple | shapely.geometry.Polygon, traffic_type: str = "arrivals"):
     """
     Downloads traffic data from OpenSky Network for arrivals and/or departures.
     
