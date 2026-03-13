@@ -80,6 +80,9 @@ class TrajectoryProcessor(DatasetProcessor):
                 traffic = Traffic(self._load_data(traj_cache_path))
             else:
                 traffic = download_traffic(self.icao, day_start_dt, day_end_dt, self.airport_circle, traffic_type=self.traffic_type)
+                if traffic is None:
+                    logger.warning(f"        ✗ No trajectories found for day {day.strftime('%Y-%m-%d')}. Skipping day.")
+                    continue
                 self._save_data(traffic.data, traj_cache_path)
 
             logger.info(f"        - Downloading flightlist...")
@@ -116,6 +119,9 @@ class TrajectoryProcessor(DatasetProcessor):
             all_traffic_dfs.append(traffic.data)
             flightlist_dfs.append(flightlist)
 
+        if len(all_traffic_dfs) == 0:
+            logger.warning(f"    ✗ No trajectories found for all days. Exiting...")
+            exit(1)
         logger.info(f"    - Saving trajectories for all days and saving to {all_trajectories_path}...")
         all_traffic = Traffic(pd.concat(all_traffic_dfs, ignore_index=True))
         self._save_data(all_traffic.data, all_trajectories_path)

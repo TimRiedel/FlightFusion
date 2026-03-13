@@ -101,9 +101,10 @@ def download_traffic(icao: str, start: str, end: str, bounds: tuple | shapely.ge
             stop=end,
             bounds=bounds
         )
-        departure_df = departure_traffic.data
-        departure_df["is_arrival"] = False
-        departure_traffic = Traffic(departure_df)
+        if departure_traffic is not None:
+            departure_df = departure_traffic.data
+            departure_df["is_arrival"] = False
+            departure_traffic = Traffic(departure_df)
 
     if traffic_type in ["all", "arrivals"]:
         arrival_traffic = opensky.history(
@@ -112,12 +113,18 @@ def download_traffic(icao: str, start: str, end: str, bounds: tuple | shapely.ge
             stop=end,
             bounds=bounds
         )
-        arrival_df = arrival_traffic.data
-        arrival_df["is_arrival"] = True
-        arrival_traffic = Traffic(arrival_df)
+        if arrival_traffic is not None:
+            arrival_df = arrival_traffic.data
+            arrival_df["is_arrival"] = True
+            arrival_traffic = Traffic(arrival_df)
 
     if traffic_type == "all":
-        traffic = Traffic(pd.concat([departure_traffic.data, arrival_traffic.data]))
+        if departure_traffic is not None and arrival_traffic is not None:
+            traffic = Traffic(pd.concat([departure_traffic.data, arrival_traffic.data]))
+        elif departure_traffic is not None:
+            traffic = departure_traffic
+        elif arrival_traffic is not None:
+            traffic = arrival_traffic
     elif traffic_type == "departures":
         traffic = departure_traffic
     elif traffic_type == "arrivals":
